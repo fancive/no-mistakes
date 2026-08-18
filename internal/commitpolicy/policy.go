@@ -80,11 +80,17 @@ func ValidatePath(provider scm.Provider, path string) error {
 	switch {
 	case base == ".env" || strings.HasPrefix(base, ".env."):
 		return fmt.Errorf("sensitive file %q must not be staged", path)
+	case base == ".npmrc" || base == ".netrc" || base == ".pypirc":
+		return fmt.Errorf("sensitive registry or network config %q must not be staged", path)
 	case strings.HasPrefix(base, "credentials"):
 		return fmt.Errorf("sensitive credentials file %q must not be staged", path)
 	case strings.Contains(base, "secret"):
 		return fmt.Errorf("sensitive secret file %q must not be staged", path)
-	case strings.HasSuffix(base, ".pem"), strings.HasSuffix(base, ".key"):
+	case base == "id_rsa" || base == "id_ed25519" || base == "id_ecdsa":
+		return fmt.Errorf("sensitive private key %q must not be staged", path)
+	case strings.HasSuffix(base, ".pem"), strings.HasSuffix(base, ".key"),
+		strings.HasSuffix(base, ".p12"), strings.HasSuffix(base, ".pfx"),
+		strings.HasSuffix(base, ".jks"), strings.HasSuffix(base, ".keystore"):
 		return fmt.Errorf("sensitive key file %q must not be staged", path)
 	}
 	if provider == scm.ProviderICode && (base == "go.mod" || base == "go.sum") {

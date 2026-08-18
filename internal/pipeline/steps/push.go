@@ -59,13 +59,27 @@ func (s *PushStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, e
 		newHeadSHA = headSHA
 	}
 
-	ref := normalizedBranchRef(sctx.Run.Branch)
+	sourceRef := normalizedBranchRef(sctx.Run.Branch)
+	ref := sourceRef
 	branch := strings.TrimPrefix(ref, "refs/heads/")
+	directMain := isGitHubDirectMainRepo(sctx)
+	if directMain {
+		branch = strings.TrimSpace(sctx.Repo.DefaultBranch)
+		if branch == "" {
+			return nil, fmt.Errorf("direct-main delivery requires a resolved default branch")
+		}
+		ref = normalizedBranchRef(branch)
+	}
 
 	pushURL := resolvePushURL(sctx)
 	pushTarget := "upstream"
 	usingFork := strings.TrimSpace(sctx.Repo.ForkURL) != ""
-	if usingFork {
+	if directMain {
+		pushURL = resolveUpstreamURL(sctx)
+		pushTarget = "direct-main"
+		usingFork = false
+		sctx.Log(fmt.Sprintf("pushing directly to default branch %s (%s)...", safeurl.Redact(pushURL), ref))
+	} else if usingFork {
 		pushTarget = "fork"
 		sctx.Log(fmt.Sprintf("pushing to fork %s (%s)...", safeurl.Redact(pushURL), ref))
 	} else {
@@ -99,31 +113,52 @@ func (s *PushStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, e
 		return &pipeline.StepOutcome{PRURL: review.URL}, nil
 	}
 
-	// Decide whether force-pushing would discard commits the pipeline never saw.
-	// The lease is anchored to the remote-tracking ref the rebase step freshly
-	// fetched (the exact commit this branch was rebased against), so a push that
-	// would clobber an out-of-band or stale-mirror commit fails loudly instead
-	// of silently dropping it. A bare --force-with-lease offers no protection
-	// when pushing to a URL (no remote-tracking refs), so the anchor is explicit.
-	lastSeen := lastFetchedBranchTip(ctx, sctx.WorkDir, branch, usingFork)
-	gitRun := func(args ...string) (string, error) { return git.Run(ctx, sctx.WorkDir, args...) }
-	decision, err := resolveForcePushDecision(gitRun, pushURL, ref, headBeingPushed, lastSeen, sctx.Run.BaseSHA)
-	if err != nil {
-		return nil, fmt.Errorf("push to %s: %w", pushTarget, err)
-	}
-	switch {
-	case decision.newBranch:
-		// New branch: regular push (no force needed).
-		if err := git.PushCommit(ctx, sctx.WorkDir, pushURL, headBeingPushed, ref, "", false); err != nil {
+	if directMain {
+		// Personal-repository direct delivery is intentionally stricter than the
+		// branch/PR path: the default branch may only move by fast-forward and is
+		// never force-pushed. A concurrent remote update therefore fails closed.
+		remoteHead, err := git.LsRemote(ctx, sctx.WorkDir, pushURL, ref)
+		if err != nil {
+			return nil, fmt.Errorf("inspect direct-main target: %w", err)
+		}
+		if strings.TrimSpace(remoteHead) == "" {
+			return nil, fmt.Errorf("direct-main target %s does not exist", ref)
+		}
+		if remoteHead != headBeingPushed {
+			if _, err := git.Run(ctx, sctx.WorkDir, "merge-base", "--is-ancestor", remoteHead, headBeingPushed); err != nil {
+				return nil, fmt.Errorf("direct-main non-fast-forward: remote %s is not an ancestor of reviewed head %s", shortObjectID(remoteHead), shortObjectID(headBeingPushed))
+			}
+			if err := git.PushCommit(ctx, sctx.WorkDir, pushURL, headBeingPushed, ref, "", false); err != nil {
+				return nil, fmt.Errorf("push to %s: %w", pushTarget, err)
+			}
+		}
+	} else {
+		// Decide whether force-pushing would discard commits the pipeline never saw.
+		// The lease is anchored to the remote-tracking ref the rebase step freshly
+		// fetched (the exact commit this branch was rebased against), so a push that
+		// would clobber an out-of-band or stale-mirror commit fails loudly instead
+		// of silently dropping it. A bare --force-with-lease offers no protection
+		// when pushing to a URL (no remote-tracking refs), so the anchor is explicit.
+		lastSeen := lastFetchedBranchTip(ctx, sctx.WorkDir, branch, usingFork)
+		gitRun := func(args ...string) (string, error) { return git.Run(ctx, sctx.WorkDir, args...) }
+		decision, err := resolveForcePushDecision(gitRun, pushURL, ref, headBeingPushed, lastSeen, sctx.Run.BaseSHA)
+		if err != nil {
 			return nil, fmt.Errorf("push to %s: %w", pushTarget, err)
 		}
-	case decision.upToDate:
-		// Remote already at this exact head. This freshly verified equality is a
-		// successful binding even though no objects needed to move.
-	default:
-		// Existing branch: force-with-lease anchored to the verified remote head.
-		if err := git.PushCommit(ctx, sctx.WorkDir, pushURL, headBeingPushed, ref, decision.remoteSHA, true); err != nil {
-			return nil, fmt.Errorf("push to %s: %w", pushTarget, err)
+		switch {
+		case decision.newBranch:
+			// New branch: regular push (no force needed).
+			if err := git.PushCommit(ctx, sctx.WorkDir, pushURL, headBeingPushed, ref, "", false); err != nil {
+				return nil, fmt.Errorf("push to %s: %w", pushTarget, err)
+			}
+		case decision.upToDate:
+			// Remote already at this exact head. This freshly verified equality is a
+			// successful binding even though no objects needed to move.
+		default:
+			// Existing branch: force-with-lease anchored to the verified remote head.
+			if err := git.PushCommit(ctx, sctx.WorkDir, pushURL, headBeingPushed, ref, decision.remoteSHA, true); err != nil {
+				return nil, fmt.Errorf("push to %s: %w", pushTarget, err)
+			}
 		}
 	}
 	verifiedRemote, err := git.LsRemote(ctx, sctx.WorkDir, pushURL, ref)
@@ -143,7 +178,7 @@ func (s *PushStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, e
 	}
 
 	if newHeadSHA != "" {
-		if _, err := git.Run(ctx, sctx.WorkDir, "update-ref", ref, newHeadSHA); err != nil {
+		if _, err := git.Run(ctx, sctx.WorkDir, "update-ref", sourceRef, newHeadSHA); err != nil {
 			return nil, fmt.Errorf("update local branch ref: %w", err)
 		}
 	}
@@ -157,7 +192,11 @@ func (s *PushStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, e
 		}
 	}
 
-	sctx.Log("pushed successfully")
+	if directMain {
+		sctx.Log(fmt.Sprintf("pushed directly to default branch %s successfully", branch))
+	} else {
+		sctx.Log("pushed successfully")
+	}
 	return &pipeline.StepOutcome{}, nil
 }
 

@@ -524,6 +524,28 @@ func TestPreflightGuardReportsWorkingTreeCheckError(t *testing.T) {
 	}
 }
 
+func TestPreflightGuardAllowsFanciveDirectMainDefaultBranch(t *testing.T) {
+	setupTestRepo(t)
+	env := &axiEnv{repo: &db.Repo{
+		DefaultBranch: "main",
+		UpstreamURL:   "git@github.com:fancive/example.git",
+	}}
+	if guard := preflightGuard(context.Background(), env, "main"); guard != nil {
+		t.Fatal("fancive direct-main repository should validate its default branch")
+	}
+}
+
+func TestPreflightGuardStillRejectsOtherGitHubDefaultBranch(t *testing.T) {
+	setupTestRepo(t)
+	env := &axiEnv{repo: &db.Repo{
+		DefaultBranch: "main",
+		UpstreamURL:   "git@github.com:other/example.git",
+	}}
+	if guard := preflightGuard(context.Background(), env, "main"); guard == nil {
+		t.Fatal("non-fancive repository must still use a feature branch")
+	}
+}
+
 func TestStatusEmptyHelpIncludesRequiredIntent(t *testing.T) {
 	out := axiDoc(
 		toon.Field{Key: "runs", Value: "0 runs yet in this repository"},

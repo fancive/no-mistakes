@@ -56,7 +56,13 @@ func TestValidateMessageRejectsAIAttributionForEveryProvider(t *testing.T) {
 }
 
 func TestValidatePathRejectsSensitiveAndICodeDependencyFiles(t *testing.T) {
-	for _, path := range []string{".env", "config/credentials-prod.json", "tls/client.pem", "tls/client.key", "config/api-secret.yaml"} {
+	for _, path := range []string{
+		".env", ".npmrc", ".netrc", ".pypirc",
+		"config/credentials-prod.json", "config/api-secret.yaml",
+		"keys/id_rsa", "keys/id_ed25519", "keys/id_ecdsa",
+		"tls/client.pem", "tls/client.key", "tls/client.p12", "tls/client.pfx",
+		"tls/client.jks", "tls/client.keystore",
+	} {
 		if err := ValidatePath(scm.ProviderGitHub, path); err == nil {
 			t.Errorf("sensitive path %q accepted", path)
 		}

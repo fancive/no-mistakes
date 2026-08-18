@@ -91,6 +91,16 @@ func RepoSlug(remoteURL string) string {
 	return owner + "/" + name
 }
 
+// DirectMainRemote reports whether remoteURL names a repository owned by the
+// operator's personal GitHub account. This fork intentionally treats fancive/*
+// as direct-main delivery; fork URLs do not call this helper, so contributions
+// whose upstream belongs to another owner retain the PR workflow.
+func DirectMainRemote(remoteURL string) bool {
+	slug := RepoSlug(remoteURL)
+	owner, _, ok := strings.Cut(slug, "/")
+	return ok && strings.EqualFold(strings.TrimSpace(owner), "fancive")
+}
+
 // HostPrefixedSlug returns "host/owner/name" for GitHub Enterprise Server
 // instances and plain "owner/name" for github.com. This is the format that
 // the gh CLI's --repo flag requires for GHE.

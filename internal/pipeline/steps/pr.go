@@ -64,6 +64,10 @@ func (s *PRStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 		sctx.Log(fmt.Sprintf("skipping PR creation on default branch %s", branch))
 		return &pipeline.StepOutcome{Skipped: true}, nil
 	}
+	if isGitHubDirectMainRepo(sctx) {
+		sctx.Log(fmt.Sprintf("skipping PR creation: direct-main delivery to %s", sctx.Repo.DefaultBranch))
+		return &pipeline.StepOutcome{Skipped: true}, nil
+	}
 	provider := scm.DetectProviderContext(ctx, sctx.Repo.UpstreamURL)
 	host, skipReason := buildHost(sctx, provider)
 	if host == nil {

@@ -18,6 +18,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
+	scmgithub "github.com/kunchenguid/no-mistakes/internal/scm/github"
 	"github.com/kunchenguid/no-mistakes/internal/telemetry"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 	"github.com/spf13/cobra"
@@ -202,7 +203,8 @@ func activeRunInfoForHead(run *ipc.RunInfo, headSHA string) *ipc.RunInfo {
 // default branch, and refuse an uncommitted working tree, each with the
 // command the agent should run.
 func preflightGuard(ctx context.Context, env *axiEnv, branch string) func(*cobra.Command) error {
-	if env.repo.DefaultBranch != "" && branch == env.repo.DefaultBranch {
+	directMain := env != nil && env.repo != nil && env.repo.ForkURL == "" && scmgithub.DirectMainRemote(env.repo.UpstreamURL)
+	if env.repo.DefaultBranch != "" && branch == env.repo.DefaultBranch && !directMain {
 		return func(cmd *cobra.Command) error {
 			return emitError(cmd, 1, fmt.Sprintf("refusing to validate %q: it is the default branch", branch),
 				"Put your changes on a feature branch: `git switch -c <branch>`, then re-run")

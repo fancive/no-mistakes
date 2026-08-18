@@ -46,6 +46,23 @@ func TestPRStep_GhNotAvailable(t *testing.T) {
 	}
 }
 
+func TestPRStepSkipsFanciveDirectMainDelivery(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Repo.UpstreamURL = "git@github.com:fancive/example.git"
+	sctx.Repo.DefaultBranch = "main"
+	sctx.Run.Branch = "refs/heads/feature"
+
+	outcome, err := (&PRStep{}).Execute(sctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome == nil || !outcome.Skipped {
+		t.Fatalf("direct-main PR outcome = %+v, want skipped", outcome)
+	}
+}
+
 func TestPRStep_UpdatesExistingPR(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)

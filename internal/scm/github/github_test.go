@@ -43,6 +43,28 @@ func TestRepoSlug(t *testing.T) {
 	}
 }
 
+func TestDirectMainRemoteOnlyMatchesFanciveUpstream(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		remote string
+		want   bool
+	}{
+		{"git@github.com:fancive/example.git", true},
+		{"https://github.com/FANCIVE/example", true},
+		{"ssh://git@github.com/fancive/example.git", true},
+		{"git@github.com:kunchenguid/no-mistakes.git", false},
+		{"https://github.com/other/fancive.git", false},
+		{"git@github.com:fancive", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		if got := DirectMainRemote(tt.remote); got != tt.want {
+			t.Errorf("DirectMainRemote(%q) = %v, want %v", tt.remote, got, tt.want)
+		}
+	}
+}
+
 func TestHostPrefixedSlug(t *testing.T) {
 	t.Parallel()
 
