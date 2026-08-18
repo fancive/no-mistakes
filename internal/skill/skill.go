@@ -76,11 +76,27 @@ task along with the command:
   1. **Check scope.** Inspect ` + "`git status`" + ` before you change or commit anything.
      Preserve unrelated pre-existing uncommitted changes, and when you commit,
      commit only the changes that belong to the user's task.
-  2. **Do the work.** Make the changes the task describes, then **commit them on
-     a feature branch**. If the user is on the repository's default branch,
+  2. **Do the work.** Make the changes the task describes on a **feature branch**.
+     If the user is on the repository's default branch,
      create a feature branch first - the gate validates committed history on a
      non-default branch, so the work must land there before you run.
-  3. **Then validate**, passing the user's task as your ` + "`--intent`" + `. The task
+  3. **Commit through AXI.** Build the exact repository-relative list of files
+     belonging to the task, then run ` + "`no-mistakes axi commit`" + `; repeat ` + "`--file`" + ` for every task-owned file.
+     Do not stage with ` + "`git add -A`" + ` or
+     ` + "`git add .`" + `; this command owns exact staging and rejects sensitive files,
+     iCode ` + "`go.mod`" + `/` + "`go.sum`" + `, duplicate or directory paths, and
+     already-staged files missing from the explicit list.
+     ` + "```sh" + `
+     no-mistakes axi commit --file path/to/one --file path/to/two --message "<message>"
+     ` + "```" + `
+     It also owns provider policy: GitHub commits use conventional subjects and
+     GitHub author ` + "`fancivez <fancive@gmail.com>`" + `; iCode subjects use
+     ` + "`{icafe-id} [Story|Bug|Task] {中文描述}`" + `, preserve the repository author,
+     and require an executable Gerrit ` + "`commit-msg`" + ` hook that adds a valid
+     ` + "`Change-Id`" + `. Every provider rejects ` + "`Co-Authored-By`" + ` and AI
+     attribution lines. If the iCode card id is not known from the user's task or
+     conversation, ask for it instead of inventing one.
+  4. **Then validate**, passing the user's task as your ` + "`--intent`" + `. The task
      text is exactly what the user set out to accomplish, in their own words, so
      it *is* the intent - preserve requirements stated directly by the user,
      including constraints, exclusions, acceptance criteria, and later decisions;
@@ -100,6 +116,10 @@ the same way once the work is committed on a feature branch.
   validates committed history, not your uncommitted working tree.
 - You must be on a **feature branch**, not the repository's default branch.
 - The repository must already be initialized with ` + "`no-mistakes init`" + `.
+- For an iCode repository, the current branch is the ` + "`refs/for`" + ` target and the tip
+  commit must already contain a valid Gerrit ` + "`Change-Id`" + ` footer. Pipeline fixes amend
+  that tip, then the provider watches machine checks/iPipe. It drives +2/submit only when
+  trusted default-branch config explicitly sets ` + "`icode.auto_submit: true`" + `.
 - The daemon must have a runnable configured pipeline agent: a supported native
   agent binary, the ` + "`agent: cursor`" + ` ACP alias, or an explicit ` + "`acp:<target>`" + ` through
   ` + "`acpx`" + `. You are the AXI driver, not

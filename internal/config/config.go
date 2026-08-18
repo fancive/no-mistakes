@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -167,6 +168,10 @@ type RepoConfig struct {
 	// pushed branch must not be able to inject or weaken the guidance that
 	// reviews it.
 	Review ReviewRaw `yaml:"review"`
+	// ICode carries write-authority policy for the Baidu iCode provider. It is
+	// trusted-only: a pushed branch must not grant itself +2/submit authority or
+	// choose who receives review requests.
+	ICode ICodeRaw `yaml:"icode"`
 	// DisableProjectSettings opts the repository out of loading project-level
 	// agent settings/instructions (AGENTS.md/CLAUDE.md and the equivalent
 	// per-harness project settings) into gate agents. It exists for
@@ -329,6 +334,7 @@ func (c *RepoConfig) UnmarshalYAML(value *yaml.Node) error {
 		Test                   TestRaw     `yaml:"test"`
 		Document               DocumentRaw `yaml:"document"`
 		Review                 ReviewRaw   `yaml:"review"`
+		ICode                  ICodeRaw    `yaml:"icode"`
 		DisableProjectSettings bool        `yaml:"disable_project_settings"`
 		NoCI                   bool        `yaml:"no_ci"`
 	}
@@ -348,6 +354,7 @@ func (c *RepoConfig) UnmarshalYAML(value *yaml.Node) error {
 	c.Test = raw.Test
 	c.Document = raw.Document
 	c.Review = raw.Review
+	c.ICode = raw.ICode
 	c.DisableProjectSettings = raw.DisableProjectSettings
 	c.NoCI = raw.NoCI
 	return nil
@@ -425,6 +432,7 @@ type Config struct {
 	Test                  Test
 	Document              Document
 	Review                Review
+	ICode                 ICode
 	// DisableProjectSettings is the resolved, trusted-only opt-out (see the
 	// RepoConfig field). When true, gate agents are launched with their
 	// project-level settings/instructions suppressed; the daemon fails the run
@@ -449,6 +457,20 @@ type Document struct {
 type Review struct {
 	PathInstructions []PathInstruction
 }
+
+// ICodeRaw is the trusted repository configuration for iCode delivery.
+type ICodeRaw struct {
+	AutoSubmit bool     `yaml:"auto_submit"`
+	Reviewers  []string `yaml:"reviewers"`
+}
+
+// ICode is the resolved iCode delivery policy.
+type ICode struct {
+	AutoSubmit bool
+	Reviewers  []string
+}
+
+var icodeReviewerPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 // TestRaw is the YAML representation of test-step settings.
 type TestRaw struct {
@@ -1414,6 +1436,9 @@ func parseRepoConfig(data []byte) (*RepoConfig, error) {
 	if err := validateReviewRaw(cfg.Review); err != nil {
 		return nil, fmt.Errorf("parse repo config: %w", err)
 	}
+	if err := validateICodeRaw(cfg.ICode); err != nil {
+		return nil, fmt.Errorf("parse repo config: %w", err)
+	}
 	if err := validateTestRaw(cfg.Test); err != nil {
 		return nil, fmt.Errorf("parse repo config: %w", err)
 	}
@@ -1458,6 +1483,28 @@ func validateReviewRaw(review ReviewRaw) error {
 	}
 	if total := ReviewPathInstructionsBytes(review.PathInstructions); total > MaxReviewPathInstructionsBytes {
 		return fmt.Errorf("review.path_instructions would add up to %d bytes to the review prompt, at most %d are allowed so the prompt stays within budget", total, MaxReviewPathInstructionsBytes)
+	}
+	return nil
+}
+
+func validateICodeRaw(cfg ICodeRaw) error {
+	if len(cfg.Reviewers) > 16 {
+		return fmt.Errorf("icode.reviewers has %d entries, at most 16 are allowed", len(cfg.Reviewers))
+	}
+	seen := make(map[string]struct{}, len(cfg.Reviewers))
+	for i, reviewer := range cfg.Reviewers {
+		reviewer = strings.TrimSpace(reviewer)
+		if reviewer == "" {
+			return fmt.Errorf("icode.reviewers[%d] must not be empty", i)
+		}
+		if len(reviewer) > 64 || !icodeReviewerPattern.MatchString(reviewer) {
+			return fmt.Errorf("icode.reviewers[%d] %q is not a valid username", i, reviewer)
+		}
+		key := strings.ToLower(reviewer)
+		if _, ok := seen[key]; ok {
+			return fmt.Errorf("icode.reviewers contains duplicate username %q", reviewer)
+		}
+		seen[key] = struct{}{}
 	}
 	return nil
 }
@@ -1523,6 +1570,7 @@ func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *R
 	effective := *pushed
 	if trusted != nil {
 		effective.Document = trusted.Document
+		effective.ICode = trusted.ICode
 		// review.path_instructions steers the gate agent that reviews the pushed
 		// branch, so it is trusted-only exactly like document.instructions and
 		// regardless of allow_repo_commands: a contributor must not be able to
@@ -1554,6 +1602,7 @@ func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *R
 		effective.Test.Evidence.Branch = trusted.Test.Evidence.Branch
 	} else {
 		effective.Document = DocumentRaw{}
+		effective.ICode = ICodeRaw{}
 		effective.Review = ReviewRaw{}
 		effective.DisableProjectSettings = false
 		effective.NoCI = false
@@ -1890,6 +1939,14 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 		commit.FixMessage = *repo.Commit.FixMessage
 	}
 
+	icodeConfig := ICode{AutoSubmit: repo.ICode.AutoSubmit, Reviewers: []string{"jipeng03", "fanzheqiang"}}
+	if len(repo.ICode.Reviewers) > 0 {
+		icodeConfig.Reviewers = make([]string, 0, len(repo.ICode.Reviewers))
+		for _, reviewer := range repo.ICode.Reviewers {
+			icodeConfig.Reviewers = append(icodeConfig.Reviewers, strings.TrimSpace(reviewer))
+		}
+	}
+
 	cfg := &Config{
 		Agent:                global.Agent,
 		Agents:               copyAgents(global.Agents),
@@ -1913,6 +1970,7 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 		Test:           test,
 		Document:       Document{Instructions: strings.TrimSpace(repo.Document.Instructions)},
 		Review:         Review{PathInstructions: resolvePathInstructions(repo.Review.PathInstructions)},
+		ICode:          icodeConfig,
 		// repo is the EffectiveRepoConfig result, so this value is already
 		// trusted-only (EffectiveRepoConfig sourced it from the trusted copy).
 		DisableProjectSettings: repo.DisableProjectSettings,

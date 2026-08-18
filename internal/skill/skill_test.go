@@ -59,7 +59,10 @@ func TestBodyDocumentsTaskFirstFlow(t *testing.T) {
 		"## Two ways to invoke",
 		"feature branch",
 		"Inspect `git status` before you change or commit anything",
-		"commit only the changes that belong to the user's task",
+		"`no-mistakes axi commit`",
+		"repeat `--file` for every task-owned file",
+		"GitHub author `fancivez <fancive@gmail.com>`",
+		"`{icafe-id} [Story|Bug|Task] {中文描述}`",
 		"passing the user's task as your `--intent`",
 	} {
 		if !strings.Contains(md, want) {

@@ -79,6 +79,39 @@ When a relevant `branch_sync` object is present, they also include version-match
 Agents must not abort-and-restart, reset, replace the branch, or improvise Git recovery in a way that drops prior gate-fix commits.
 A fresh run re-validates the current branch state, so already-resolved findings do not re-surface.
 
+## no-mistakes axi commit
+
+Create the task-first commit from an exact repository-relative file list before
+starting validation. The command works before `no-mistakes init`; initialization
+is required by `axi run`, not by this local commit boundary.
+
+```sh
+no-mistakes axi commit \
+  --file internal/commitpolicy/policy.go \
+  --file internal/commitpolicy/policy_test.go \
+  --message "feat(commit): enforce provider submission policy"
+```
+
+Repeat `--file` for every file that belongs in the commit. Each value must name
+one file, not a directory or pathspec. The final staged set must exactly match
+the explicit list, so an already-staged file omitted from the command blocks
+the commit instead of being included implicitly. Sensitive paths are rejected.
+
+Provider rules are applied before the index is changed:
+
+- GitHub requires a conventional subject and sets author
+  `fancivez <fancive@gmail.com>`.
+- Baidu iCode requires
+  `{icafe-id} [Story|Bug|Task] {中文描述}`, preserves the repository author,
+  excludes `go.mod` and `go.sum`, and requires an executable Gerrit
+  `commit-msg` hook. The completed commit is accepted only when the hook adds a
+  valid `Change-Id: I<40 hex>` footer.
+- Every provider rejects `Co-Authored-By` and AI attribution lines.
+
+If staging, a commit hook, or Change-Id verification fails, the original index
+is restored. For a missing iCode Change-Id, the new commit is also rolled back
+while the worktree edits remain available.
+
 ## no-mistakes axi run
 
 Start or reattach to validation for the current branch, blocking until the first approval gate, CI-ready decision point, or final outcome.

@@ -198,7 +198,6 @@ func makeInstallArchive(t *testing.T, archivePath, binaryContent string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer file.Close()
 	gz := gzip.NewWriter(file)
 	tw := tar.NewWriter(gz)
 	data := []byte(binaryContent)
@@ -213,6 +212,9 @@ func makeInstallArchive(t *testing.T, archivePath, binaryContent string) {
 		t.Fatal(err)
 	}
 	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
 		t.Fatal(err)
 	}
 }

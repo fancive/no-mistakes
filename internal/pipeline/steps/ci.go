@@ -40,6 +40,7 @@ type CIStep struct {
 	lastFixedChecks      string               // sorted check names from last fix attempt, to avoid re-fixing
 	lastFixedCompletedAt map[string]time.Time // terminally failed check completion times seen before the last fix attempt
 	ciFixAttempts        int                  // number of CI auto-fix attempts made
+	lastSubmissionLog    string               // de-duplicates provider review-submit status
 	transientReruns      checkRerunBudget     // per-check rerun budget spent on provider-reported transient failures
 	pollIntervalOverride time.Duration        // if set, overrides computed poll interval (for testing)
 	waitForNextPoll      func(context.Context, time.Duration) error
@@ -49,6 +50,8 @@ type CIStep struct {
 	// must not re-arm the timeout. Overridable for testing; defaults to
 	// fetching the upstream default branch.
 	baseBranchTip func(context.Context) (string, bool)
+	// hostOverride is test-only injection for provider lifecycle contracts.
+	hostOverride scm.Host
 }
 
 func (s *CIStep) Name() types.StepName { return types.StepCI }
@@ -69,7 +72,7 @@ func (s *CIStep) ReconcileApprovalGate(sctx *pipeline.StepContext) (bool, error)
 	if provider == scm.ProviderUnknown && sctx.Run.PRURL != nil {
 		provider = scm.DetectProviderContext(sctx.Ctx, *sctx.Run.PRURL)
 	}
-	host, skipReason := buildHost(sctx, provider)
+	host, skipReason := s.resolveHost(sctx, provider)
 	if host == nil {
 		return false, fmt.Errorf("cannot check PR state: %s", skipReason)
 	}
@@ -136,7 +139,7 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 	if provider == scm.ProviderUnknown && sctx.Run.PRURL != nil {
 		provider = scm.DetectProviderContext(ctx, *sctx.Run.PRURL)
 	}
-	host, skipReason := buildHost(sctx, provider)
+	host, skipReason := s.resolveHost(sctx, provider)
 	if host == nil {
 		sctx.Log(fmt.Sprintf("skipping CI: %s", skipReason))
 		return &pipeline.StepOutcome{Skipped: true}, nil
@@ -515,6 +518,22 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 						sctx.Log("no CI checks reported yet, waiting for checks to register...")
 					}
 				case allChecksPassed(checks):
+					if submitter, ok := host.(scm.ReviewSubmitter); ok {
+						submission, submitErr := submitter.EnsureSubmitted(ctx, pr)
+						if submitErr != nil {
+							clearCIMonitorReady(sctx)
+							return ciReviewSubmissionOutcome(submitErr), nil
+						}
+						message := strings.TrimSpace(submission.Message)
+						if message != "" && message != s.lastSubmissionLog {
+							if submission.Pending {
+								sctx.Log("review checks passed; waiting for provider approval: " + message)
+							} else if submission.Submitted {
+								sctx.Log("review checks passed; provider submit accepted: " + message)
+							}
+							s.lastSubmissionLog = message
+						}
+					}
 					lastMonitorLog = logCIMonitorStatus(sctx, ciChecksPassedMsg, lastMonitorLog)
 				default:
 					clearCIMonitorReady(sctx)
@@ -549,6 +568,13 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 			return nil, err
 		}
 	}
+}
+
+func (s *CIStep) resolveHost(sctx *pipeline.StepContext, provider scm.Provider) (scm.Host, string) {
+	if s.hostOverride != nil {
+		return s.hostOverride, ""
+	}
+	return buildHost(sctx, provider)
 }
 
 func logCIMonitorStatus(sctx *pipeline.StepContext, message, previous string) string {

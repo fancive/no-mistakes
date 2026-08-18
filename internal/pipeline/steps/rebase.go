@@ -13,6 +13,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/agent"
 	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
+	"github.com/kunchenguid/no-mistakes/internal/scm"
 	"github.com/kunchenguid/no-mistakes/internal/testguidance"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
@@ -47,6 +48,13 @@ func (s *RebaseStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome,
 	// commit is authoritative and must not be overwritten by prior pipeline
 	// state on the remote.
 	forcePush := isForcePushAgainstRemote(ctx, sctx.WorkDir, pushRemote, branch, branchTarget, sctx.Run.BaseSHA)
+	icodeProvider := scm.DetectProviderContext(ctx, sctx.Repo.UpstreamURL) == scm.ProviderICode
+	if icodeProvider {
+		// refs/for creates patch sets rather than updating refs/heads. The target
+		// release branch remains the only rebase base; adding the repository
+		// default branch would silently widen the review.
+		forcePush = false
+	}
 
 	sctx.Log("fetching latest upstream state...")
 	if err := fetchRunUpstreamBranch(ctx, sctx, defaultBranch); err != nil {
@@ -96,6 +104,9 @@ func (s *RebaseStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome,
 	}
 
 	targets := rebaseTargetsForBranch(branch, defaultBranch, branchTarget)
+	if icodeProvider {
+		targets = icodeRebaseTargets(branch, defaultBranch, branchTarget)
+	}
 	if forcePush {
 		sctx.Log("force push detected, skipping " + branchTarget + " sync")
 		targets = forcePushRebaseTargets(branch, defaultBranch)
@@ -520,7 +531,7 @@ func updateHeadSHA(ctx context.Context, sctx *pipeline.StepContext) (*pipeline.S
 	if defaultBranch == "" {
 		defaultBranch = "main"
 	}
-	baseSHA := resolveBranchBaseSHA(ctx, sctx.WorkDir, sctx.Run.BaseSHA, defaultBranch)
+	baseSHA := resolvePipelineBaseSHA(ctx, sctx)
 	diff, err := git.Diff(ctx, sctx.WorkDir, baseSHA, "HEAD")
 	if err == nil && strings.TrimSpace(diff) == "" {
 		sctx.Log("empty diff after rebase, skipping remaining steps")

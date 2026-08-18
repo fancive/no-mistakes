@@ -72,6 +72,18 @@ func stripPort(host string) string {
 func ExtractPRNumber(prURL string) (string, error) {
 	trimmed := strings.TrimRight(prURL, "/")
 	parts := strings.Split(trimmed, "/")
+	// iCode review URLs end in /reviews/<number>/, while some copied links add
+	// a trailing /show. Resolve the segment following "reviews" before falling
+	// back to providers whose numeric identifier is the final path segment.
+	for i := len(parts) - 2; i >= 0; i-- {
+		if parts[i] != "reviews" || i+1 >= len(parts) {
+			continue
+		}
+		num := parts[i+1]
+		if _, err := strconv.Atoi(num); err == nil {
+			return num, nil
+		}
+	}
 	if len(parts) == 0 {
 		return "", fmt.Errorf("invalid PR URL: %s", prURL)
 	}
@@ -208,4 +220,21 @@ type CheckRerunner interface {
 	// returns an error when the request could not be made, including when the
 	// check names no job the provider can re-run.
 	RerunCheck(ctx context.Context, pr *PR, check Check) error
+}
+
+// ReviewSubmission describes a provider-specific attempt to submit a review.
+// Pending means the review is valid but still needs an external approval or
+// provider-side submit prerequisite. Submitted means the provider accepted the
+// submit operation; GetPRState remains the authoritative merge confirmation.
+type ReviewSubmission struct {
+	Submitted bool
+	Pending   bool
+	Message   string
+}
+
+// ReviewSubmitter is implemented by review systems such as iCode where the
+// pipeline is authorized to score and submit the review after checks pass.
+// Ordinary pull-request hosts do not implement it and retain human merge flow.
+type ReviewSubmitter interface {
+	EnsureSubmitted(ctx context.Context, pr *PR) (ReviewSubmission, error)
 }

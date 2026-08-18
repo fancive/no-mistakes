@@ -38,6 +38,23 @@ func TestExtractHost(t *testing.T) {
 	}
 }
 
+func TestExtractPRNumberSupportsICodeReviewURLs(t *testing.T) {
+	t.Parallel()
+
+	for _, raw := range []string{
+		"https://console.cloud.baidu-int.com/devops/icode/repos/baidu/inputmethod/v5api/reviews/122119825/",
+		"https://console.cloud.baidu-int.com/devops/icode/repos/baidu/inputmethod/v5api/reviews/122119825",
+	} {
+		got, err := ExtractPRNumber(raw)
+		if err != nil {
+			t.Fatalf("ExtractPRNumber(%q) error = %v", raw, err)
+		}
+		if got != "122119825" {
+			t.Fatalf("ExtractPRNumber(%q) = %q, want 122119825", raw, got)
+		}
+	}
+}
+
 func TestCheckBucketHelpers(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

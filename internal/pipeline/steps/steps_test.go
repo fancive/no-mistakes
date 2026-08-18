@@ -68,9 +68,27 @@ func handleFakeCLI(mode string) {
 		fakeCIGlabSequenceHandler(args)
 	case "ci-gh-reconcile":
 		fakeCIGHReconcileHandler(args)
+	case "icode":
+		fakeICodeHandler(args)
 	default:
 		os.Exit(1)
 	}
+}
+
+func fakeICodeHandler(args []string) {
+	if len(args) < 2 || args[0] != "api" {
+		os.Exit(1)
+	}
+	switch args[1] {
+	case "get_submit_settings":
+		fmt.Println(`{"status":"OK","data":{}}`)
+	case "get_repo_reviews":
+		fmt.Printf(`{"status":"OK","data":{"changes":[{"_number":123,"branch":%q,"current_revision":%q}]}}`+"\n",
+			os.Getenv("FAKE_ICODE_BRANCH"), os.Getenv("FAKE_ICODE_HEAD"))
+	default:
+		os.Exit(1)
+	}
+	os.Exit(0)
 }
 
 func logFakeCLIStdinBody(args []string, logFile string) {

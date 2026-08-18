@@ -8,7 +8,7 @@ Per-repo configuration lives in `.no-mistakes.yaml` at the root of your reposito
 :::caution[Security: gate-control fields are read from the default branch]
 `commands.*` execute arbitrary shell on the daemon host via `sh -c` / `cmd.exe /c`, and `agent` selects which process launches there (including ordered fallback lists, ACP aliases such as `cursor`, and `acp:` targets) with the maintainer's credentials.
 To prevent a supply-chain attack where a contributor lands a hostile value on a gated branch, the daemon always reads **`commands` and `agent` from your default branch** (e.g. `origin/main`), never from the pushed SHA, and reads them at the exact commit a fresh fetch resolved (so a stale `origin/<default>` ref cannot serve a value the live default branch removed).
-The daemon also reads `document.instructions`, `review.path_instructions`, `disable_project_settings`, `no_ci`, `ci.rerun_transient`, and `test.evidence.branch` only from that trusted copy.
+The daemon also reads `document.instructions`, `review.path_instructions`, `icode`, `disable_project_settings`, `no_ci`, `ci.rerun_transient`, and `test.evidence.branch` only from that trusted copy.
 If the default branch cannot be fetched and resolved to a readable commit, or its present `.no-mistakes.yaml` cannot be read and parsed, the run aborts before launching an agent.
 A readable default-branch tree with no `.no-mistakes.yaml` is valid and uses defaults.
 Commit the gate-control settings you want to your default branch.
@@ -70,6 +70,11 @@ ci:
 
 commit:
   fix_message: "chore(no-mistakes-{{.Step}}): {{.Summary}}"
+
+# Trusted-only iCode write authority. Omit or keep false for validate-only use.
+icode:
+  auto_submit: true
+  reviewers: [jipeng03, fanzheqiang]
 
 intent:
   enabled: true
@@ -393,6 +398,32 @@ That includes the 1,024-byte template limit, 16-placeholder limit, 4,096-byte su
 The setting applies to the Review, Test, Document, and Lint fix path, not commits created by the Rebase, CI, or Push steps.
 
 This non-executing field is read from the pushed branch, so a branch can adopt its own commit convention without enabling `allow_repo_commands`.
+
+### icode
+
+Trusted Baidu iCode delivery policy. The entire block is read only from the
+default-branch copy, regardless of `allow_repo_commands`, because it grants
+write authority over review scores, reviewers, and submit.
+
+| Field | Type | Default |
+| --- | --- | --- |
+| `icode.auto_submit` | `bool` | `false` |
+| `icode.reviewers` | `string[]` | `jipeng03`, `fanzheqiang` |
+
+When `auto_submit` is false, the iCode provider still creates/follows the CR and
+monitors machine checks and iPipe, but never scores, adds reviewers, or submits.
+When true, all-green checks authorize the provider to try self `+2`, add the
+configured reviewers when self-scoring is unavailable, and retry submit while
+the CI monitor remains active. Up to 16 unique reviewer usernames are allowed;
+each may contain ASCII letters, digits, `.`, `_`, or `-`.
+
+```yaml
+icode:
+  auto_submit: true
+  reviewers:
+    - jipeng03
+    - fanzheqiang
+```
 
 ### intent
 

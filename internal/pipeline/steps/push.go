@@ -49,8 +49,7 @@ func (s *PushStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, e
 		if _, err := git.Run(ctx, sctx.WorkDir, "add", "-A"); err != nil {
 			return nil, fmt.Errorf("stage agent changes: %w", err)
 		}
-		_, err := git.Run(ctx, sctx.WorkDir, "commit", "-m", "no-mistakes: apply agent fixes")
-		if err != nil {
+		if err := commitPipelineChanges(sctx, "no-mistakes: apply agent fixes"); err != nil {
 			return nil, fmt.Errorf("commit agent changes: %w", err)
 		}
 		headSHA, err := git.HeadSHA(ctx, sctx.WorkDir)
@@ -79,6 +78,25 @@ func (s *PushStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, e
 	}
 	if err := assertReviewApprovedPushHead(sctx, headBeingPushed); err != nil {
 		return nil, err
+	}
+	if isICodeRepo(sctx) {
+		review, err := pushICodeReviewedHead(sctx, headBeingPushed)
+		if err != nil {
+			return nil, err
+		}
+		if newHeadSHA != "" {
+			if _, err := git.Run(ctx, sctx.WorkDir, "update-ref", normalizedBranchRef(sctx.Run.Branch), newHeadSHA); err != nil {
+				return nil, fmt.Errorf("update local branch ref: %w", err)
+			}
+		}
+		if headBeingPushed != sctx.Run.HeadSHA {
+			sctx.Run.HeadSHA = headBeingPushed
+			if err := sctx.DB.UpdateRunHeadSHA(sctx.Run.ID, headBeingPushed); err != nil {
+				return nil, err
+			}
+		}
+		sctx.Log(fmt.Sprintf("pushed iCode review successfully: %s", review.URL))
+		return &pipeline.StepOutcome{PRURL: review.URL}, nil
 	}
 
 	// Decide whether force-pushing would discard commits the pipeline never saw.
