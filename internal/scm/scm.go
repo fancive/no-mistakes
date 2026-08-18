@@ -20,6 +20,7 @@ const (
 	ProviderGitLab      Provider = "gitlab"
 	ProviderBitbucket   Provider = "bitbucket"
 	ProviderAzureDevOps Provider = "azuredevops"
+	ProviderICode       Provider = "icode"
 	ProviderUnknown     Provider = "unknown"
 )
 
@@ -62,6 +63,8 @@ func detectProviderWithoutSSH(url string) Provider {
 		// Covers dev.azure.com, ssh.dev.azure.com, {org}.visualstudio.com, and
 		// the legacy vs-ssh.visualstudio.com SSH host.
 		return ProviderAzureDevOps
+	case strings.Contains(lower, "icode.baidu.com"):
+		return ProviderICode
 	}
 
 	// Fallback for self-hosted GitLab instances whose hostname carries no
@@ -249,6 +252,8 @@ func (p Provider) CLIName() string {
 		return "bb"
 	case ProviderAzureDevOps:
 		return "az"
+	case ProviderICode:
+		return "icode-cli"
 	default:
 		return ""
 	}
@@ -264,6 +269,8 @@ func (p Provider) AuthCheckCommand() []string {
 		return []string{"bb", "profile", "which"}
 	case ProviderAzureDevOps:
 		return []string{"az", "account", "show"}
+	case ProviderICode:
+		return []string{"icode-cli", "login"}
 	default:
 		return nil
 	}

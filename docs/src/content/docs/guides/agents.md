@@ -158,11 +158,13 @@ The one exception is when that monitor is no longer running - the PR was closed,
 The agent must not use `no-mistakes axi run` to refresh a still-active PR: after `checks-passed` it reattaches to the running monitor with HEAD unchanged and returns the monitor output without rebasing.
 
 In task-first mode, if the repo is on the default branch, the skill tells the agent to create a feature branch before committing because the gate validates committed history on a non-default branch.
-The agent should inspect `git status` before changing or committing anything, preserve unrelated pre-existing uncommitted changes, and commit only the changes that belong to the user's task.
+The agent should inspect `git status` before changing or committing anything, preserve unrelated pre-existing uncommitted changes, and use `no-mistakes axi commit` with one `--file` per task-owned file.
+That command owns exact staging, the GitHub author, iCode iCafe message format and Change-Id verification, and the common ban on secret-like paths and AI attribution lines.
 
 Agents can also call `no-mistakes axi` directly:
 
 ```sh
+no-mistakes axi commit --file path/to/file --message "<provider-compliant message>"
 no-mistakes axi run --intent "the user's goal"
 no-mistakes axi status
 no-mistakes axi sync --check

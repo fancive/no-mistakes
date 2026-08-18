@@ -395,6 +395,19 @@ func fakeGlab(t *testing.T, mrViewJSON string) (env []string, logFile string) {
 	return env, logFile
 }
 
+func fakeICode(t *testing.T, branch, headSHA string) []string {
+	t.Helper()
+	binDir := fakeCLIBinDir(t)
+	linkTestBinary(t, binDir, "icode-cli")
+	return fakeCLIEnv(binDir, map[string]string{
+		"FAKE_CLI_MODE":           "icode",
+		"FAKE_ICODE_BRANCH":       branch,
+		"FAKE_ICODE_HEAD":         headSHA,
+		"PREPUSH_SKIP":            "1",
+		"ICODE_DEFAULT_REVIEWERS": "reviewer1,reviewer2",
+	})
+}
+
 // newTestContextWithDBRecords is like newTestContext but also inserts
 // repo and run records into the database so GetRun works after updates.
 func recordReviewApproval(t *testing.T, sctx *pipeline.StepContext, headSHA string) {

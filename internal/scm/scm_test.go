@@ -26,6 +26,8 @@ func TestDetectProvider(t *testing.T) {
 		{"https://dev.azure.com/org/project/_git/repo", ProviderAzureDevOps},
 		{"git@ssh.dev.azure.com:v3/org/project/repo", ProviderAzureDevOps},
 		{"https://org.visualstudio.com/project/_git/repo", ProviderAzureDevOps},
+		{"ssh://user@icode.baidu.com:8235/baidu/inputmethod/v5api", ProviderICode},
+		{"git@icode.baidu.com:baidu/inputmethod/v5api.git", ProviderICode},
 		{"https://example.com/user/repo.git", ProviderUnknown},
 	}
 

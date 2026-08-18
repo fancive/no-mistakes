@@ -1,11 +1,12 @@
 ---
 title: Provider Integration
-description: Set up GitHub, GitLab, Bitbucket Cloud, or Azure DevOps for PR creation and CI monitoring.
+description: Set up GitHub, GitLab, Bitbucket Cloud, Azure DevOps, or Baidu iCode for review creation and CI monitoring.
 ---
 
-The PR and CI steps need to talk to your git host. Four hosts are supported:
+The PR and CI steps need to talk to your git host. Five hosts are supported:
 GitHub, GitLab, Bitbucket Cloud (`bitbucket.org`), and Azure DevOps
-(`dev.azure.com` and legacy `*.visualstudio.com`). Everything else
+(`dev.azure.com` and legacy `*.visualstudio.com`), plus Baidu iCode
+(`icode.baidu.com`). Everything else
 short-circuits the PR and CI steps with `skipped`.
 
 Provider integration is optional for the local gate. You only need it for the
@@ -25,14 +26,14 @@ What you do not get is PR automation and CI monitoring.
 
 ## What each step needs
 
-| Step | GitHub | GitLab | Bitbucket Cloud | Azure DevOps |
-|---|---|---|---|---|
-| **PR** (create/update) | `gh` CLI, authenticated | `glab` CLI, authenticated | `NO_MISTAKES_BITBUCKET_EMAIL` + `NO_MISTAKES_BITBUCKET_API_TOKEN` | `az` CLI + `azure-devops` extension, authenticated |
-| **CI** (polling, auto-fix) | `gh` CLI | `glab` CLI | same env vars | `az` CLI |
-| **Merge conflict auto-fix** | `gh` CLI | `glab` CLI | not supported | `az` CLI |
-| **Mergeability polling** | `gh` CLI | `glab` CLI | not supported | `az` CLI |
-| **Failed check log fetching** | `gh` CLI | `glab` CLI | supported | not yet |
-| **[Cancelled-check rerun](/no-mistakes/reference/repo-config/#cirerun_transient)** | `gh` CLI | not supported | not supported | not supported |
+| Step | GitHub | GitLab | Bitbucket Cloud | Azure DevOps | Baidu iCode |
+|---|---|---|---|---|---|
+| **PR/CR** (create/update) | `gh` CLI, authenticated | `glab` CLI, authenticated | `NO_MISTAKES_BITBUCKET_EMAIL` + `NO_MISTAKES_BITBUCKET_API_TOKEN` | `az` CLI + `azure-devops` extension, authenticated | `icode-cli`, authenticated; CR is created by `refs/for` push |
+| **CI** (polling, auto-fix) | `gh` CLI | `glab` CLI | same env vars | `az` CLI | `icode-cli` machine checks + iPipe status |
+| **Merge conflict auto-fix** | `gh` CLI | `glab` CLI | not supported | `az` CLI | not supported |
+| **Mergeability polling** | `gh` CLI | `glab` CLI | not supported | `az` CLI | not supported |
+| **Failed check log fetching** | `gh` CLI | `glab` CLI | supported | not yet | not yet |
+| **[Cancelled-check rerun](/no-mistakes/reference/repo-config/#cirerun_transient)** | `gh` CLI | not supported | not supported | not supported | not supported |
 
 ## What changes when provider wiring is present
 
@@ -185,6 +186,40 @@ well as their SSH forms (`git@ssh.dev.azure.com:v3/...`).
   first-class build-log command)
 - Fork PR routing (same as GitLab and Bitbucket)
 
+## Baidu iCode
+
+iCode repositories are detected from `icode.baidu.com` remotes and use the
+authenticated `icode-cli` JSON API. Verify access before gating:
+
+```sh
+icode-cli api get_submit_settings --repo baidu/inputmethod/v5api --check-permission -o json
+```
+
+The delivery model is Gerrit-style rather than branch-PR-style:
+
+- the current non-default branch is the target review branch;
+- the tip commit must already carry a valid `Change-Id: I<40 hex>` footer;
+- pipeline fixes amend that tip so every round stays on one CR;
+- push writes the immutable reviewed head to `refs/for/<current-branch>`;
+- the CR is resolved by matching iCode's `current_revision` to the pushed SHA;
+- machine checks and iPipe builds are normalized into the ordinary CI monitor;
+- when trusted default-branch config sets `icode.auto_submit: true`, all-green
+  checks authorize self `+2` and submit; when the operator lacks scoring
+  permission the provider adds `icode.reviewers`, then keeps waiting for
+  external `+2` and retries submit on later polls. The default is validate-only:
+  no scoring, reviewer changes, or submit writes.
+
+For task-first agent work, create the tip with `no-mistakes axi commit`. It
+requires an exact repeated `--file` list, rejects `go.mod` and `go.sum`, checks
+the iCafe subject format `{icafe-id} [Story|Bug|Task] {中文描述}`, and refuses to
+commit unless an executable Gerrit `commit-msg` hook is installed. After the
+hook runs, it verifies the resulting footer instead of assuming that a
+successful `git commit` produced a valid Change-Id.
+
+iCode exposes no standalone PR-body update API in this integration, so the CR
+subject and iCafe linkage continue to come from the commit message. Failed-job
+log retrieval and merge-conflict auto-fix are not yet available.
+
 ## Self-hosted GitHub/GitLab
 
 Self-hosted GitHub Enterprise and self-hosted GitLab instances work through the same `gh` and `glab` CLIs. Authenticate the CLI against your instance (`gh auth login --hostname your-ghe.example.com`, `glab auth login --hostname gitlab.example.com`) and `no-mistakes` will route through the CLI as usual.
@@ -215,7 +250,7 @@ If `ssh -G` is unavailable or the alias does not resolve, detection falls back t
 
 ## Unsupported hosts
 
-If your upstream isn't GitHub, GitLab, Bitbucket Cloud, or Azure DevOps:
+If your upstream isn't GitHub, GitLab, Bitbucket Cloud, Azure DevOps, or Baidu iCode:
 
 - The **push** step still runs - `no-mistakes` pushes through git to the configured target like any other remote.
 - The **PR** step marks itself as `skipped`.
@@ -229,7 +264,7 @@ Everything before push (rebase, review, test, document, lint) still works regard
 no-mistakes doctor
 ```
 
-`doctor` checks `gh` and `az` availability. For GitLab, confirm `glab` is installed and authenticated. For Bitbucket Cloud, confirm the two env vars are set in the environment the daemon runs under. For Azure DevOps, confirm the `azure-devops` extension is installed (`az extension show --name azure-devops`) and a PAT is available.
+`doctor` checks `gh` and `az` availability. For GitLab, confirm `glab` is installed and authenticated. For Bitbucket Cloud, confirm the two env vars are set in the environment the daemon runs under. For Azure DevOps, confirm the `azure-devops` extension is installed (`az extension show --name azure-devops`) and a PAT is available. For iCode, confirm `icode-cli` is installed and the read-only `get_submit_settings --check-permission` command succeeds.
 
 :::note
 When the daemon runs through a managed service (launchd, systemd, Task Scheduler), it reloads environment from your login shell on macOS and Linux so `gh` auth and `NO_MISTAKES_BITBUCKET_*` vars are picked up, and it augments `PATH` with common binary directories. If credentials or PATH-derived tools are missing, check `~/.no-mistakes/logs/daemon.log` for a login-shell environment resolution warning. On Windows it reuses the current process environment.

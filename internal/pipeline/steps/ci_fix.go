@@ -23,8 +23,9 @@ func (s *CIStep) autoFixCI(sctx *pipeline.StepContext, host scm.Host, pr *scm.PR
 		return false, err
 	}
 	defer func() { _ = sctx.DB.SetRunPushActive(sctx.Run.ID, false) }()
-	baseSHA := resolveBranchBaseSHA(ctx, sctx.WorkDir, sctx.Run.BaseSHA, sctx.Repo.DefaultBranch)
-	rebaseBaseSHA := resolveRunDefaultBranchTipSHA(ctx, sctx, sctx.Run.BaseSHA, sctx.Repo.DefaultBranch)
+	baseBranch := pipelineBaseBranch(sctx)
+	baseSHA := resolvePipelineBaseSHA(ctx, sctx)
+	rebaseBaseSHA := resolveRunDefaultBranchTipSHA(ctx, sctx, sctx.Run.BaseSHA, baseBranch)
 	promptBaseSHA := baseSHA
 	if mergeConflict {
 		promptBaseSHA = rebaseBaseSHA
@@ -137,7 +138,7 @@ func (s *CIStep) commitAndPush(sctx *pipeline.StepContext) (bool, error) {
 	if _, err := stepGitRun(sctx, "add", "-A"); err != nil {
 		return false, fmt.Errorf("stage CI changes: %w", err)
 	}
-	if _, err := stepGitRun(sctx, "commit", "-m", "no-mistakes: apply CI fixes"); err != nil {
+	if err := commitPipelineChanges(sctx, "no-mistakes: apply CI fixes"); err != nil {
 		return false, fmt.Errorf("commit: %w", err)
 	}
 	headSHA, err := stepGitHeadSHA(sctx)
@@ -149,6 +150,21 @@ func (s *CIStep) commitAndPush(sctx *pipeline.StepContext) (bool, error) {
 }
 
 func (s *CIStep) pushUpdatedHeadSHA(sctx *pipeline.StepContext, newHeadSHA string) (bool, error) {
+	if isICodeRepo(sctx) {
+		review, err := pushICodeReviewedHead(sctx, newHeadSHA)
+		if err != nil {
+			return false, err
+		}
+		if _, err := stepGitRun(sctx, "update-ref", normalizedBranchRef(sctx.Run.Branch), newHeadSHA); err != nil {
+			return false, fmt.Errorf("update local branch ref: %w", err)
+		}
+		sctx.Run.HeadSHA = newHeadSHA
+		if err := sctx.DB.UpdateRunHeadSHA(sctx.Run.ID, newHeadSHA); err != nil {
+			return false, err
+		}
+		sctx.Log(fmt.Sprintf("amended and pushed iCode review fixes: %s", review.URL))
+		return true, nil
+	}
 	ref := normalizedBranchRef(sctx.Run.Branch)
 	pushURL := resolvePushURL(sctx)
 

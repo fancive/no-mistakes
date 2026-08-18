@@ -3,6 +3,7 @@ package steps
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
@@ -215,6 +216,23 @@ func ciMergeabilityOutcome(summary, description string) *pipeline.StepOutcome {
 		NeedsApproval: true,
 		Findings:      string(findingsJSON),
 	}
+}
+
+func ciReviewSubmissionOutcome(err error) *pipeline.StepOutcome {
+	description := "provider review could not be submitted"
+	if err != nil && strings.TrimSpace(err.Error()) != "" {
+		description += ": " + strings.TrimSpace(err.Error())
+	}
+	findings := Findings{
+		Summary: "provider review submission requires intervention",
+		Items: []Finding{{
+			Severity:    "warning",
+			Description: description,
+			Action:      types.ActionAskUser,
+		}},
+	}
+	findingsJSON, _ := json.Marshal(findings)
+	return &pipeline.StepOutcome{NeedsApproval: true, Findings: string(findingsJSON)}
 }
 
 func ciMonitoringTimeoutOutcome() *pipeline.StepOutcome {

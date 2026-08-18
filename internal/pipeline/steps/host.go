@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"strings"
 
 	"github.com/kunchenguid/no-mistakes/internal/bitbucket"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
@@ -11,6 +12,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/scm/azuredevops"
 	"github.com/kunchenguid/no-mistakes/internal/scm/github"
 	"github.com/kunchenguid/no-mistakes/internal/scm/gitlab"
+	"github.com/kunchenguid/no-mistakes/internal/scm/icode"
 )
 
 // buildHost returns a scm.Host for the given provider, wired to sctx's
@@ -91,6 +93,22 @@ func buildHost(sctx *pipeline.StepContext, provider scm.Provider) (scm.Host, str
 			return nil, "could not resolve Azure DevOps organization, project, and repository from the remote URL"
 		}
 		return azuredevops.New(cmdFactory, func() bool { return stepCLIAvailable(sctx, provider) }, org, project, repo), ""
+	case scm.ProviderICode:
+		repo := icode.RepoPath(sctx.Repo.UpstreamURL)
+		if repo == "" {
+			return nil, "could not resolve iCode repository path from the remote URL"
+		}
+		headSHA := sctx.Run.HeadSHA
+		if currentHead, err := stepGitHeadSHA(sctx); err == nil && currentHead != "" {
+			headSHA = currentHead
+		}
+		reviewers := ""
+		autoSubmit := false
+		if sctx.Config != nil {
+			reviewers = strings.Join(sctx.Config.ICode.Reviewers, ",")
+			autoSubmit = sctx.Config.ICode.AutoSubmit
+		}
+		return icode.New(cmdFactory, func() bool { return stepCLIAvailable(sctx, provider) }, repo, headSHA, icode.Options{Reviewers: reviewers, AutoSubmit: autoSubmit}), ""
 	default:
 		return nil, fmt.Sprintf("provider %s is not supported yet", provider)
 	}
