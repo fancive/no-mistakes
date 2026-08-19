@@ -43,7 +43,7 @@ Safest local verification sequence after non-trivial changes:
 **Authored Commit Policy (`internal/commitpolicy`, `internal/commitprep`)**
 
 - Agent task-first commits go through `no-mistakes axi commit` with repeated repository-relative `--file` values. The complete staged set must equal that explicit list; never add a broad staging fallback or silently include an already-staged path outside the list.
-- Provider policy is deterministic: GitHub requires a conventional subject and author `fancivez <fancive@gmail.com>`; iCode requires `{icafe-id} [Story|Bug|Task] {中文描述}`, preserves the local author, excludes `go.mod`/`go.sum`, and verifies the Gerrit `commit-msg` hook produced a valid `Change-Id`. All providers reject secret-like paths and AI attribution trailers.
+- Provider policy is deterministic: GitHub requires a conventional subject and author `fancivez <fancive@gmail.com>`; iCode requires `{icafe-id} [Story|Bug|Task] {中文描述}`, preserves the local author, allows explicitly listed `go.mod`/`go.sum`, and verifies the Gerrit `commit-msg` hook produced a valid `Change-Id`. All providers reject secret-like paths and AI attribution trailers.
 - Validate message, paths, hook availability, and pre-existing index scope before mutation. A staging or commit failure must restore the original index, and an iCode commit without a valid generated `Change-Id` must restore both HEAD and index while leaving worktree edits intact.
 
 **Documentation**

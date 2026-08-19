@@ -55,7 +55,7 @@ func TestValidateMessageRejectsAIAttributionForEveryProvider(t *testing.T) {
 	}
 }
 
-func TestValidatePathRejectsSensitiveAndICodeDependencyFiles(t *testing.T) {
+func TestValidatePathRejectsSensitiveFilesAndAllowsDependencyFiles(t *testing.T) {
 	for _, path := range []string{
 		".env", ".npmrc", ".netrc", ".pypirc",
 		"config/credentials-prod.json", "config/api-secret.yaml",
@@ -68,8 +68,8 @@ func TestValidatePathRejectsSensitiveAndICodeDependencyFiles(t *testing.T) {
 		}
 	}
 	for _, path := range []string{"go.mod", "app/v5api/go.sum"} {
-		if err := ValidatePath(scm.ProviderICode, path); err == nil {
-			t.Errorf("iCode dependency path %q accepted", path)
+		if err := ValidatePath(scm.ProviderICode, path); err != nil {
+			t.Errorf("iCode dependency path %q unexpectedly rejected: %v", path, err)
 		}
 	}
 	if err := ValidatePath(scm.ProviderGitHub, "app/v5api/go.mod"); err != nil {

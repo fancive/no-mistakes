@@ -75,7 +75,7 @@ func ValidateMessage(provider scm.Provider, message string) error {
 
 // ValidatePath rejects files that the shared submission rules never allow in
 // an authored commit.
-func ValidatePath(provider scm.Provider, path string) error {
+func ValidatePath(_ scm.Provider, path string) error {
 	base := strings.ToLower(filepath.Base(filepath.FromSlash(path)))
 	switch {
 	case base == ".env" || strings.HasPrefix(base, ".env."):
@@ -92,9 +92,6 @@ func ValidatePath(provider scm.Provider, path string) error {
 		strings.HasSuffix(base, ".p12"), strings.HasSuffix(base, ".pfx"),
 		strings.HasSuffix(base, ".jks"), strings.HasSuffix(base, ".keystore"):
 		return fmt.Errorf("sensitive key file %q must not be staged", path)
-	}
-	if provider == scm.ProviderICode && (base == "go.mod" || base == "go.sum") {
-		return fmt.Errorf("iCode commit must exclude %s from staging", base)
 	}
 	return nil
 }

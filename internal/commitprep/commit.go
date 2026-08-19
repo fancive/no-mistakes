@@ -21,6 +21,7 @@ type Options struct {
 	Dir     string
 	Files   []string
 	Message string
+	Amend   bool
 }
 
 // Result is the immutable evidence returned after a successful commit.
@@ -29,6 +30,7 @@ type Result struct {
 	Branch   string
 	Provider scm.Provider
 	Files    []string
+	Amended  bool
 }
 
 // Commit validates policy before mutating the index, stages only Files, checks
@@ -50,7 +52,15 @@ func Commit(ctx context.Context, opts Options) (Result, error) {
 		return Result{}, fmt.Errorf("detached HEAD: create or switch to a feature branch before committing")
 	}
 	provider := detectProvider(ctx, root)
-	if err := commitpolicy.ValidateMessage(provider, opts.Message); err != nil {
+	message := strings.TrimSpace(opts.Message)
+	if opts.Amend && message == "" {
+		currentMessage, err := git.Run(ctx, root, "show", "-s", "--format=%B", "HEAD")
+		if err != nil {
+			return Result{}, fmt.Errorf("read HEAD commit message: %w", err)
+		}
+		message = currentMessage
+	}
+	if err := commitpolicy.ValidateMessage(provider, message); err != nil {
 		return Result{}, err
 	}
 	files, err := normalizeFiles(ctx, root, provider, opts.Files)
@@ -102,10 +112,17 @@ func Commit(ctx context.Context, opts Options) (Result, error) {
 		return Result{}, fmt.Errorf("read HEAD before commit: %w", err)
 	}
 	commitArgs := []string{"commit"}
+	if opts.Amend {
+		commitArgs = append(commitArgs, "--amend")
+	}
 	if author, ok := commitpolicy.AuthorFor(provider); ok {
 		commitArgs = append(commitArgs, "--author="+author.Name+" <"+author.Email+">")
 	}
-	commitArgs = append(commitArgs, "-m", opts.Message)
+	if opts.Amend && strings.TrimSpace(opts.Message) == "" {
+		commitArgs = append(commitArgs, "--no-edit")
+	} else {
+		commitArgs = append(commitArgs, "-m", message)
+	}
 	if _, err := git.Run(ctx, root, commitArgs...); err != nil {
 		return Result{}, fmt.Errorf("create commit: %w", err)
 	}
@@ -127,7 +144,7 @@ func Commit(ctx context.Context, opts Options) (Result, error) {
 		}
 	}
 
-	return Result{SHA: sha, Branch: branch, Provider: provider, Files: files}, nil
+	return Result{SHA: sha, Branch: branch, Provider: provider, Files: files, Amended: opts.Amend}, nil
 }
 
 func detectProvider(ctx context.Context, root string) scm.Provider {

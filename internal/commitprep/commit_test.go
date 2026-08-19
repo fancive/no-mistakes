@@ -184,6 +184,40 @@ func TestCommitICodePreservesLocalAuthorAndVerifiesChangeID(t *testing.T) {
 	}
 }
 
+func TestCommitAmendsICodeCommitAndPreservesChangeID(t *testing.T) {
+	dir := initRepo(t, "git@icode.baidu.com:baidu/inputmethod/v5api.git")
+	installChangeIDHook(t, dir)
+	gitCmd(t, dir, "commit", "--amend", "-m", "IMInput-10207 [Story] 初始提交\n\nChange-Id: I1111111111111111111111111111111111111111")
+	write(t, dir, "switch.php", "<?php return 2;\n")
+
+	beforeCount := gitCmd(t, dir, "rev-list", "--count", "HEAD")
+	beforeHead := gitCmd(t, dir, "rev-parse", "HEAD")
+	result, err := Commit(context.Background(), Options{
+		Dir:     dir,
+		Files:   []string{"switch.php"},
+		Amend:   true,
+		Message: "",
+	})
+	if err != nil {
+		t.Fatalf("Commit amend failed: %v", err)
+	}
+	if !result.Amended {
+		t.Fatal("result did not report amend mode")
+	}
+	afterCount := gitCmd(t, dir, "rev-list", "--count", "HEAD")
+	afterHead := gitCmd(t, dir, "rev-parse", "HEAD")
+	if afterCount != beforeCount {
+		t.Fatalf("commit count = %s, want unchanged %s", afterCount, beforeCount)
+	}
+	if afterHead == beforeHead {
+		t.Fatal("amend did not advance HEAD")
+	}
+	message := gitCmd(t, dir, "show", "-s", "--format=%B", "HEAD")
+	if !strings.Contains(message, "IMInput-10207 [Story] 初始提交") || !strings.Contains(message, "Change-Id: I1111111111111111111111111111111111111111") {
+		t.Fatalf("amended message lost subject or Change-Id: %q", message)
+	}
+}
+
 func TestCommitRestoresOriginalIndexWhenCommitHookRejects(t *testing.T) {
 	dir := initRepo(t, "git@github.com:fancive/example.git")
 	write(t, dir, "selected.txt", "selected\n")
@@ -238,7 +272,7 @@ func TestCommitRollsBackICodeCommitWhenHookAddsNoChangeID(t *testing.T) {
 	}
 }
 
-func TestCommitRejectsSensitiveAndICodeDependencyPaths(t *testing.T) {
+func TestCommitRejectsSensitivePaths(t *testing.T) {
 	tests := []struct {
 		name     string
 		remote   string
@@ -247,7 +281,6 @@ func TestCommitRejectsSensitiveAndICodeDependencyPaths(t *testing.T) {
 		wantText string
 	}{
 		{"secret", "git@github.com:fancive/example.git", ".env", "chore: update environment", "sensitive"},
-		{"icode-go-sum", "git@icode.baidu.com:baidu/inputmethod/v5api.git", "app/go.sum", "IMInput-10207 [Task] 更新依赖校验", "go.sum"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -262,5 +295,24 @@ func TestCommitRejectsSensitiveAndICodeDependencyPaths(t *testing.T) {
 				t.Fatalf("rejected path mutated index: %q", got)
 			}
 		})
+	}
+}
+
+func TestCommitAllowsICodeDependencyFiles(t *testing.T) {
+	dir := initRepo(t, "git@icode.baidu.com:baidu/inputmethod/v5api.git")
+	installChangeIDHook(t, dir)
+	write(t, dir, "go.mod", "module example.com/dependency-update\n")
+	write(t, dir, "go.sum", "example.com/dependency v1.0.0 h1:test\n")
+
+	result, err := Commit(context.Background(), Options{
+		Dir:     dir,
+		Files:   []string{"go.mod", "go.sum"},
+		Message: "IMInput-10207 [Task] 更新依赖校验",
+	})
+	if err != nil {
+		t.Fatalf("commit iCode dependency files: %v", err)
+	}
+	if got, want := strings.Join(result.Files, ","), "go.mod,go.sum"; got != want {
+		t.Fatalf("committed files = %q, want %q", got, want)
 	}
 }

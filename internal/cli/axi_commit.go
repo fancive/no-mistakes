@@ -13,12 +13,15 @@ import (
 func newAxiCommitCmd() *cobra.Command {
 	var files []string
 	var message string
+	var amend bool
 	cmd := &cobra.Command{
 		Use:   "commit",
 		Short: "Commit an exact file list under provider-specific submission rules",
 		Long: "Stages only repeated --file values and commits them after validating the\n" +
-			"provider-specific author and message policy. Paths are repository-relative,\n" +
-			"must name individual files, and must include every already-staged file.",
+			"provider-specific author and message policy. Pass --amend to update the\n" +
+			"current commit in place; omit --message in that mode to reuse the existing\n" +
+			"commit message. Paths are repository-relative, must name individual files,\n" +
+			"and must include every already-staged file.",
 		Args:          cobra.NoArgs,
 		SilenceErrors: true,
 		SilenceUsage:  true,
@@ -26,7 +29,7 @@ func newAxiCommitCmd() *cobra.Command {
 			return trackAxiSurface("axi-commit", "/axi/commit", telemetry.Fields{
 				"file_count": len(files),
 			}, func() error {
-				if strings.TrimSpace(message) == "" {
+				if !amend && strings.TrimSpace(message) == "" {
 					return emitError(cmd, 2, "--message is required",
 						`Pass the complete commit message with --message "..."`)
 				}
@@ -34,20 +37,22 @@ func newAxiCommitCmd() *cobra.Command {
 					return emitError(cmd, 2, "at least one --file is required",
 						"Repeat --file for every repository-relative file that belongs in the commit")
 				}
-				return runAxiCommit(cmd, files, message)
+				return runAxiCommit(cmd, files, message, amend)
 			})
 		},
 	}
 	cmd.Flags().StringArrayVar(&files, "file", nil, "repository-relative file to stage; repeat for every file")
 	cmd.Flags().StringVarP(&message, "message", "m", "", "complete provider-compliant commit message")
+	cmd.Flags().BoolVar(&amend, "amend", false, "amend the current commit instead of creating a new one")
 	return cmd
 }
 
-func runAxiCommit(cmd *cobra.Command, files []string, message string) error {
+func runAxiCommit(cmd *cobra.Command, files []string, message string, amend bool) error {
 	result, err := commitprep.Commit(cmd.Context(), commitprep.Options{
 		Dir:     ".",
 		Files:   files,
 		Message: message,
+		Amend:   amend,
 	})
 	if err != nil {
 		return emitError(cmd, 1, err.Error(),
@@ -55,6 +60,7 @@ func runAxiCommit(cmd *cobra.Command, files []string, message string) error {
 	}
 	emitDoc(cmd,
 		toon.Field{Key: "committed", Value: true},
+		toon.Field{Key: "amended", Value: result.Amended},
 		toon.Field{Key: "sha", Value: result.SHA},
 		toon.Field{Key: "branch", Value: result.Branch},
 		toon.Field{Key: "provider", Value: string(result.Provider)},

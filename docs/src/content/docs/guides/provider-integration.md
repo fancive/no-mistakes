@@ -210,11 +210,13 @@ The delivery model is Gerrit-style rather than branch-PR-style:
   no scoring, reviewer changes, or submit writes.
 
 For task-first agent work, create the tip with `no-mistakes axi commit`. It
-requires an exact repeated `--file` list, rejects `go.mod` and `go.sum`, checks
+requires an exact repeated `--file` list, allows explicitly listed `go.mod` and `go.sum`, checks
 the iCafe subject format `{icafe-id} [Story|Bug|Task] {中文描述}`, and refuses to
 commit unless an executable Gerrit `commit-msg` hook is installed. After the
 hook runs, it verifies the resulting footer instead of assuming that a
-successful `git commit` produced a valid Change-Id.
+successful `git commit` produced a valid Change-Id. When updating an existing
+iCode patch set, pass `--amend` and omit `--message` to keep the current
+`Change-Id` on the same CR.
 
 iCode exposes no standalone PR-body update API in this integration, so the CR
 subject and iCafe linkage continue to come from the commit message. Failed-job

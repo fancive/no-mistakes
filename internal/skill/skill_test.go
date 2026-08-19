@@ -61,6 +61,7 @@ func TestBodyDocumentsTaskFirstFlow(t *testing.T) {
 		"Inspect `git status` before you change or commit anything",
 		"`no-mistakes axi commit`",
 		"repeat `--file` for every task-owned file",
+		"`--amend`",
 		"GitHub author `fancivez <fancive@gmail.com>`",
 		"`{icafe-id} [Story|Bug|Task] {中文描述}`",
 		"passing the user's task as your `--intent`",

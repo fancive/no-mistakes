@@ -103,10 +103,14 @@ Provider rules are applied before the index is changed:
   `fancivez <fancive@gmail.com>`.
 - Baidu iCode requires
   `{icafe-id} [Story|Bug|Task] {中文描述}`, preserves the repository author,
-  excludes `go.mod` and `go.sum`, and requires an executable Gerrit
+  allows explicitly listed `go.mod` and `go.sum`, and requires an executable Gerrit
   `commit-msg` hook. The completed commit is accepted only when the hook adds a
   valid `Change-Id: I<40 hex>` footer.
 - Every provider rejects `Co-Authored-By` and AI attribution lines.
+- Pass `--amend` to update the current commit in place. On iCode, omit
+  `--message` in that mode to reuse the existing commit message and keep the
+  current `Change-Id`; if you do supply a new message, include the same valid
+  `Change-Id` footer.
 
 If staging, a commit hook, or Change-Id verification fails, the original index
 is restored. For a missing iCode Change-Id, the new commit is also rolled back
