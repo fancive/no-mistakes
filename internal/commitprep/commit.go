@@ -34,7 +34,9 @@ type Result struct {
 }
 
 // Commit validates policy before mutating the index, stages only Files, checks
-// that the complete index matches that list, and creates one commit.
+// that the complete index matches that list, and creates one commit, or with
+// Amend set, amends the current commit in place (preserving an existing iCode
+// Change-Id when the message is reused or replaced).
 func Commit(ctx context.Context, opts Options) (Result, error) {
 	dir := opts.Dir
 	if strings.TrimSpace(dir) == "" {
