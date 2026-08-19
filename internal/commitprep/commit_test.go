@@ -218,6 +218,100 @@ func TestCommitAmendsICodeCommitAndPreservesChangeID(t *testing.T) {
 	}
 }
 
+func TestCommitAmendICodeWithNewMessagePreservesCurrentChangeID(t *testing.T) {
+	dir := initRepo(t, "git@icode.baidu.com:baidu/inputmethod/v5api.git")
+	installChangeIDHook(t, dir)
+	gitCmd(t, dir, "commit", "--amend", "-m", "IMInput-10207 [Story] 初始提交\n\nChange-Id: I1111111111111111111111111111111111111111")
+	hook := filepath.Join(dir, ".git", "hooks", "commit-msg")
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\nif ! grep -qE '^Change-Id: I[0-9a-f]{40}$' \"$1\"; then printf '\\nChange-Id: I2222222222222222222222222222222222222222\\n' >> \"$1\"; fi\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, dir, "switch.php", "<?php return 2;\n")
+
+	beforeCount := gitCmd(t, dir, "rev-list", "--count", "HEAD")
+	result, err := Commit(context.Background(), Options{
+		Dir:     dir,
+		Files:   []string{"switch.php"},
+		Amend:   true,
+		Message: "IMInput-10207 [Story] 更新实现",
+	})
+	if err != nil {
+		t.Fatalf("Commit amend failed: %v", err)
+	}
+	if !result.Amended {
+		t.Fatal("result did not report amend mode")
+	}
+	if got := gitCmd(t, dir, "rev-list", "--count", "HEAD"); got != beforeCount {
+		t.Fatalf("commit count = %s, want unchanged %s", got, beforeCount)
+	}
+	message := gitCmd(t, dir, "show", "-s", "--format=%B", "HEAD")
+	if !strings.Contains(message, "IMInput-10207 [Story] 更新实现") {
+		t.Fatalf("amended message lost the new subject: %q", message)
+	}
+	if !strings.Contains(message, "Change-Id: I1111111111111111111111111111111111111111") {
+		t.Fatalf("amended message lost the current Change-Id: %q", message)
+	}
+	if strings.Contains(message, "2222222222222222222222222222222222222222") {
+		t.Fatalf("amended message minted a fresh Change-Id: %q", message)
+	}
+}
+
+func TestCommitAmendICodeWithNewMessageRejectsDifferentChangeID(t *testing.T) {
+	dir := initRepo(t, "git@icode.baidu.com:baidu/inputmethod/v5api.git")
+	installChangeIDHook(t, dir)
+	gitCmd(t, dir, "commit", "--amend", "-m", "IMInput-10207 [Story] 初始提交\n\nChange-Id: I1111111111111111111111111111111111111111")
+	write(t, dir, "switch.php", "<?php return 2;\n")
+	before := gitCmd(t, dir, "rev-parse", "HEAD")
+
+	_, err := Commit(context.Background(), Options{
+		Dir:     dir,
+		Files:   []string{"switch.php"},
+		Amend:   true,
+		Message: "IMInput-10207 [Story] 更新实现\n\nChange-Id: I3333333333333333333333333333333333333333",
+	})
+	if err == nil || !strings.Contains(err.Error(), "changes the current Change-Id") {
+		t.Fatalf("expected Change-Id preservation error, got %v", err)
+	}
+	if got := gitCmd(t, dir, "rev-parse", "HEAD"); got != before {
+		t.Fatalf("HEAD changed from %s to %s", before, got)
+	}
+	if got := gitCmd(t, dir, "diff", "--cached", "--name-only"); got != "" {
+		t.Fatalf("rejected message mutated index: %q", got)
+	}
+}
+
+func TestCommitAmendICodeRollsBackWhenHookReplacesChangeID(t *testing.T) {
+	dir := initRepo(t, "git@icode.baidu.com:baidu/inputmethod/v5api.git")
+	installChangeIDHook(t, dir)
+	gitCmd(t, dir, "commit", "--amend", "-m", "IMInput-10207 [Story] 初始提交\n\nChange-Id: I1111111111111111111111111111111111111111")
+	hook := filepath.Join(dir, ".git", "hooks", "commit-msg")
+	script := "#!/bin/sh\ngrep -v '^Change-Id:' \"$1\" > \"$1.tmp\" && mv \"$1.tmp\" \"$1\"\nprintf '\\nChange-Id: I4444444444444444444444444444444444444444\\n' >> \"$1\"\n"
+	if err := os.WriteFile(hook, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, dir, "switch.php", "<?php return 2;\n")
+	before := gitCmd(t, dir, "rev-parse", "HEAD")
+
+	_, err := Commit(context.Background(), Options{
+		Dir:     dir,
+		Files:   []string{"switch.php"},
+		Amend:   true,
+		Message: "IMInput-10207 [Story] 更新实现",
+	})
+	if err == nil || !strings.Contains(err.Error(), "changed the Change-Id footer") {
+		t.Fatalf("expected Change-Id preservation verification failure, got %v", err)
+	}
+	if got := gitCmd(t, dir, "rev-parse", "HEAD"); got != before {
+		t.Fatalf("HEAD changed from %s to %s", before, got)
+	}
+	if got := gitCmd(t, dir, "diff", "--cached", "--name-only"); got != "" {
+		t.Fatalf("rollback did not restore original index: %q", got)
+	}
+	if got := gitCmd(t, dir, "status", "--short"); got != "?? switch.php" {
+		t.Fatalf("worktree change was not preserved: %q", got)
+	}
+}
+
 func TestCommitRestoresOriginalIndexWhenCommitHookRejects(t *testing.T) {
 	dir := initRepo(t, "git@github.com:fancive/example.git")
 	write(t, dir, "selected.txt", "selected\n")

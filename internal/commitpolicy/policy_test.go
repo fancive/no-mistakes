@@ -99,3 +99,17 @@ func TestHasValidICodeChangeID(t *testing.T) {
 		t.Fatal("short Change-Id accepted")
 	}
 }
+
+func TestICodeChangeID(t *testing.T) {
+	id := "I" + strings.Repeat("a", 40)
+	valid := "IMInput-10207 [Story] 增加提交门禁\n\nChange-Id: " + id
+	if got := ICodeChangeID(valid); got != id {
+		t.Fatalf("ICodeChangeID = %q, want %q", got, id)
+	}
+	if got := ICodeChangeID("Change-Id: I1234"); got != "" {
+		t.Fatalf("short Change-Id accepted: %q", got)
+	}
+	if got := ICodeChangeID("no footer"); got != "" {
+		t.Fatalf("missing Change-Id accepted: %q", got)
+	}
+}

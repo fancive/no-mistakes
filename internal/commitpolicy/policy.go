@@ -17,7 +17,7 @@ import (
 
 var (
 	icodeSubjectPattern  = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9_]*-[0-9]+) \[(Story|Bug|Task)\] (.+)$`)
-	icodeChangeIDPattern = regexp.MustCompile(`(?m)^Change-Id:\s+I[0-9a-fA-F]{40}\s*$`)
+	icodeChangeIDPattern = regexp.MustCompile(`(?m)^Change-Id:\s*(I[0-9a-fA-F]{40})\s*$`)
 	coAuthorPattern      = regexp.MustCompile(`(?im)^\s*co-authored-by\s*:`)
 	aiAttributionPattern = regexp.MustCompile(`(?im)^\s*(?:generated\s+with\s+(?:claude(?:\s+code)?|codex|chatgpt|copilot|ai)|ai[- ]generated(?:-by)?\s*:?)`)
 )
@@ -100,6 +100,16 @@ func ValidatePath(_ scm.Provider, path string) error {
 // Change-Id footer required to keep later pipeline fixes on one iCode review.
 func HasValidICodeChangeID(message string) bool {
 	return icodeChangeIDPattern.MatchString(message)
+}
+
+// ICodeChangeID returns the Gerrit Change-Id hex value found in a commit
+// message, or "" when the message carries no valid footer.
+func ICodeChangeID(message string) string {
+	match := icodeChangeIDPattern.FindStringSubmatch(message)
+	if len(match) != 2 {
+		return ""
+	}
+	return match[1]
 }
 
 func containsHan(value string) bool {

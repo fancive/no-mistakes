@@ -53,12 +53,28 @@ func Commit(ctx context.Context, opts Options) (Result, error) {
 	}
 	provider := detectProvider(ctx, root)
 	message := strings.TrimSpace(opts.Message)
-	if opts.Amend && message == "" {
+	newMessage := message != ""
+	var preAmendChangeID string
+	if opts.Amend {
 		currentMessage, err := git.Run(ctx, root, "show", "-s", "--format=%B", "HEAD")
 		if err != nil {
 			return Result{}, fmt.Errorf("read HEAD commit message: %w", err)
 		}
-		message = currentMessage
+		if !newMessage {
+			message = currentMessage
+		}
+		if provider == scm.ProviderICode {
+			preAmendChangeID = commitpolicy.ICodeChangeID(currentMessage)
+			if newMessage && preAmendChangeID != "" {
+				if id := commitpolicy.ICodeChangeID(message); id != "" {
+					if id != preAmendChangeID {
+						return Result{}, fmt.Errorf("amended iCode message changes the current Change-Id footer; keep %s to stay on the current CR", preAmendChangeID)
+					}
+				} else {
+					message += "\n\nChange-Id: " + preAmendChangeID
+				}
+			}
+		}
 	}
 	if err := commitpolicy.ValidateMessage(provider, message); err != nil {
 		return Result{}, err
@@ -118,7 +134,7 @@ func Commit(ctx context.Context, opts Options) (Result, error) {
 	if author, ok := commitpolicy.AuthorFor(provider); ok {
 		commitArgs = append(commitArgs, "--author="+author.Name+" <"+author.Email+">")
 	}
-	if opts.Amend && strings.TrimSpace(opts.Message) == "" {
+	if opts.Amend && !newMessage {
 		commitArgs = append(commitArgs, "--no-edit")
 	} else {
 		commitArgs = append(commitArgs, "-m", message)
@@ -133,14 +149,21 @@ func Commit(ctx context.Context, opts Options) (Result, error) {
 		return Result{}, fmt.Errorf("read committed HEAD: %w", err)
 	}
 	if provider == scm.ProviderICode {
-		message, readErr := git.Run(ctx, root, "show", "-s", "--format=%B", sha)
-		if readErr != nil || !commitpolicy.HasValidICodeChangeID(message) {
+		committedMessage, readErr := git.Run(ctx, root, "show", "-s", "--format=%B", sha)
+		reason := ""
+		switch {
+		case readErr != nil || !commitpolicy.HasValidICodeChangeID(committedMessage):
+			reason = "iCode commit-msg hook did not add a valid Change-Id footer; fix the hook before committing"
+		case opts.Amend && preAmendChangeID != "" && commitpolicy.ICodeChangeID(committedMessage) != preAmendChangeID:
+			reason = fmt.Sprintf("amended iCode commit changed the Change-Id footer from %s; the commit-msg hook must preserve it", preAmendChangeID)
+		}
+		if reason != "" {
 			_, resetErr := git.Run(ctx, root, "reset", "--mixed", beforeHead)
 			_ = snapshot.restore()
 			if resetErr != nil {
-				return Result{}, fmt.Errorf("iCode commit is missing a valid Change-Id footer and rollback failed: %v", resetErr)
+				return Result{}, fmt.Errorf("%s and rollback failed: %v", reason, resetErr)
 			}
-			return Result{}, fmt.Errorf("iCode commit-msg hook did not add a valid Change-Id footer; fix the hook before committing")
+			return Result{}, fmt.Errorf("%s", reason)
 		}
 	}
 

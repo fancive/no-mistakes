@@ -107,14 +107,14 @@ Provider rules are applied before the index is changed:
   `commit-msg` hook. The completed commit is accepted only when the hook adds a
   valid `Change-Id: I<40 hex>` footer.
 - Every provider rejects `Co-Authored-By` and AI attribution lines.
-- Pass `--amend` to update the current commit in place. On iCode, omit
-  `--message` in that mode to reuse the existing commit message and keep the
-  current `Change-Id`; if you do supply a new message, include the same valid
-  `Change-Id` footer.
+- Pass `--amend` to update the current commit in place. On iCode, the current
+  `Change-Id` is preserved automatically: omit `--message` to reuse the
+  existing message, or supply a new message and the footer is kept for you. A
+  new message that changes the `Change-Id` footer is rejected before staging.
 
 If staging, a commit hook, or Change-Id verification fails, the original index
-is restored. For a missing iCode Change-Id, the new commit is also rolled back
-while the worktree edits remain available.
+is restored. For a missing or changed iCode Change-Id, the new commit is also
+rolled back while the worktree edits remain available.
 
 ## no-mistakes axi run
 

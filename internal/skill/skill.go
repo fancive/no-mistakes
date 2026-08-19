@@ -82,9 +82,9 @@ task along with the command:
      non-default branch, so the work must land there before you run.
   3. **Commit through AXI.** Build the exact repository-relative list of files
      belonging to the task, then run ` + "`no-mistakes axi commit`" + `; repeat ` + "`--file`" + ` for every task-owned file.
-     Use ` + "`--amend`" + ` when updating an existing iCode patch set; omit
-     ` + "`--message`" + ` in that mode to reuse the current message and keep
-     the same ` + "`Change-Id`" + `.
+     Use ` + "`--amend`" + ` when updating an existing iCode patch set; the
+     current ` + "`Change-Id`" + ` is preserved whether you reuse the message
+     (omit ` + "`--message`" + `) or supply a new one.
      Do not stage with ` + "`git add -A`" + ` or
      ` + "`git add .`" + `; this command owns exact staging and rejects sensitive files,
      duplicate or directory paths, and
