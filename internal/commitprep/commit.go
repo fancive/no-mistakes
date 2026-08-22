@@ -230,6 +230,12 @@ func Commit(ctx context.Context, opts Options) (Result, error) {
 		return Result{}, fmt.Errorf("read HEAD before commit: %w", err)
 	}
 	commitArgs := []string{"commit"}
+	if provider == scm.ProviderGitHub {
+		// The user's global hooks may include Gerrit's standard commit-msg hook.
+		// Keep hooks active, but use its documented opt-out so GitHub commits do
+		// not acquire an unrelated Change-Id footer.
+		commitArgs = []string{"-c", "gerrit.createChangeId=false", "commit"}
+	}
 	if opts.Amend {
 		commitArgs = append(commitArgs, "--amend")
 	}

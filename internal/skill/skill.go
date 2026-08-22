@@ -70,7 +70,8 @@ If lint rewrites authored or tracked content, the guard blocks instead of silent
 the rewrite.
 
 GitHub subjects use conventional ` + "`type(scope): description`" + ` and author
-` + "`fancivez <fancive@gmail.com>`" + `. iCode subjects use
+` + "`fancivez <fancive@gmail.com>`" + `. GitHub commits keep normal hooks active but
+disable Gerrit's standard ` + "`Change-Id`" + ` insertion for that command. iCode subjects use
 ` + "`{icafe-id} [Story|Bug|Task] {中文描述}`" + ` and require an executable Gerrit
 commit-msg hook. Never invent an iCafe id and never add AI attribution.
 
@@ -88,8 +89,10 @@ no-mistakes push --expected-head <commit-sha>
 
 Push always re-resolves the exact current HEAD and live remote. It never force-pushes.
 
-- fancive GitHub repositories: regular fast-forward push to the resolved default branch;
-- other GitHub repositories: regular push to the attached feature branch, then return to
+- fancive GitHub repositories without a conventional ` + "`origin=fork, upstream=parent`" + `
+  layout: regular fast-forward push to the resolved default branch;
+- GitHub fork checkouts and other GitHub repositories: regular push to the attached feature
+  branch, then return to
   ` + "`ship`" + `/GitHub tooling for PR, CI, and merge;
 - iCode: require the remote ` + "`refs/heads/<SCM_FLOW branch>`" + ` to exist, push the
   immutable commit to ` + "`refs/for/<branch>`" + ` and observe machine checks/iPipe. The
@@ -99,6 +102,10 @@ Push always re-resolves the exact current HEAD and live remote. It never force-p
   ` + "`--allow-icode-submit`" + `, and the exact ` + "`--icode-policy-hash`" + ` reported by
   ` + "`check`" + `. Otherwise return pending before those writes. Only ` + "`MERGED`" + ` is
   success; ` + "`icode-cli`" + ` has no revision-CAS write flag.
+
+A GitHub feature branch may have no tracking ref or track ` + "`origin/<same-branch>`" + `.
+If it tracks a differently named ref, the guard blocks instead of silently creating another
+remote branch or guessing the intended PR target.
 
 No-mistakes never creates an SCM_FLOW branch. When the target is missing, return custody to
 the main context and invoke ` + "`$ipipe-pull-branch`" + ` explicitly under its confirmation

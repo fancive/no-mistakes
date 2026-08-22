@@ -77,11 +77,16 @@ capability token and never authorizes mutation.
    prior check snapshot.
 2. Bind the operation to the immutable resolved HEAD SHA and exact target ref.
 3. Read the live remote immediately before mutation.
-4. GitHub direct-main and feature delivery use a regular push only. A server-side concurrent
-   update or non-fast-forward relationship is rejected by Git; there is no force mode.
-5. iCode re-proves the target `refs/heads/<branch>`, then pushes
+4. GitHub direct-main and feature delivery use a regular push only. A conventional
+   `origin=fork, upstream=parent` checkout always uses feature delivery, even when the fork
+   owner is `fancive`. A server-side concurrent update or non-fast-forward relationship is
+   rejected by Git; there is no force mode.
+5. A GitHub feature branch with a configured tracking ref must track
+   `origin/<same-branch>`. A differently named tracking target blocks instead of being
+   ignored or replaced by a newly created remote branch.
+6. iCode re-proves the target `refs/heads/<branch>`, then pushes
    `<immutable-SHA>:refs/for/<branch>`. It never updates or creates the target branch.
-6. Verify provider truth after mutation instead of inferring success from process exit.
+7. Verify provider truth after mutation instead of inferring success from process exit.
 
 This model prevents check-to-commit/push races while remaining synchronous and stateless:
 mutable assumptions are sampled again at the mutation boundary, Git index rollback protects

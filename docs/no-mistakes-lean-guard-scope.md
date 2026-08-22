@@ -30,7 +30,8 @@ returning orchestration and code authoring to the main agent context.
 - Execute deterministic commit and push commands only after the caller (`ship`) has obtained
   the required authorization.
 - Keep GitHub delivery limited to a safe branch push: direct-main for the configured personal
-  owner, feature-branch push otherwise. PR creation, CI monitoring, and merge remain outside
+  owner except conventional `origin=fork, upstream=parent` checkouts, and feature-branch
+  push for forks and other owners. PR creation, CI monitoring, and merge remain outside
   no-mistakes.
 - Keep the iCode delivery tail: verify an existing SCM_FLOW target, push the immutable commit
   to `refs/for/<branch>`, and observe machine checks/iPipe. With `icode.auto_submit: true`
@@ -80,10 +81,12 @@ the exact verified commit:
 | Provider/mode | Push behavior | Tail behavior |
 |---|---|---|
 | GitHub direct-main | regular fast-forward push to the resolved default branch | return delivered SHA |
-| GitHub feature | regular non-force push to the same feature branch | return branch handoff for `ship` |
+| GitHub fork or feature | regular non-force push to the same feature branch | return branch handoff for `ship` |
 | iCode | regular push of immutable SHA to `refs/for/<SCM_FLOW branch>` | observe CR/checks; with config eligibility plus exact HEAD/policy capability, self `+2`/reviewers, submit, prove `MERGED`, emit deploy handoff |
 
 Any non-fast-forward GitHub update blocks. Version 1 of the lean guard has no force-push mode.
+A GitHub feature branch that tracks a differently named `origin/*` ref also blocks; the
+caller must align the local/tracking branch names instead of letting the guard guess a PR target.
 The iCode target `refs/heads/<branch>` must exist before commit and again before push; a local
 branch name or tracking ref is not evidence.
 

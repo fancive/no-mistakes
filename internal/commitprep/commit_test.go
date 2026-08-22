@@ -103,6 +103,33 @@ func TestCommitGitHubStagesOnlyExplicitFilesAndSetsAuthor(t *testing.T) {
 	}
 }
 
+func TestGitHubCommitSuppressesGlobalGerritChangeIDHook(t *testing.T) {
+	dir := initRepo(t, "git@github.com:fancive/example.git")
+	hooks := t.TempDir()
+	hook := filepath.Join(hooks, "commit-msg")
+	script := `#!/bin/sh
+if test "$(git config --bool --get gerrit.createChangeId)" != false; then
+  printf '\nChange-Id: I1111111111111111111111111111111111111111\n' >> "$1"
+fi
+`
+	if err := os.WriteFile(hook, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, dir, "config", "core.hooksPath", hooks)
+	write(t, dir, "tracked.txt", "changed\n")
+
+	result, err := Commit(context.Background(), Options{
+		Dir: dir, Files: []string{"tracked.txt"}, Message: "feat(cli): suppress Gerrit footer",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message := gitCmd(t, dir, "show", "-s", "--format=%B", result.SHA)
+	if strings.Contains(message, "Change-Id:") {
+		t.Fatalf("GitHub commit contains Gerrit Change-Id:\n%s", message)
+	}
+}
+
 func TestCommitRefusesPreStagedFileOutsideExplicitListWithoutMutatingIndex(t *testing.T) {
 	dir := initRepo(t, "git@github.com:fancive/example.git")
 	write(t, dir, "selected.txt", "selected\n")

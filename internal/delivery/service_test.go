@@ -123,6 +123,50 @@ func TestPushGitHubFeatureCreatesOnlyFeatureBranch(t *testing.T) {
 	}
 }
 
+func TestPushGitHubFanciveForkCheckoutCreatesOnlyFeatureBranch(t *testing.T) {
+	root, remote := setupDeliveryRepo(t, "git@github.com:fancive/example.git")
+	const upstreamURL = "https://github.com/parent/example.git"
+	deliveryGit(t, root, "remote", "add", "upstream", upstreamURL)
+	deliveryGit(t, root, "config", "--add", "url."+remote+".insteadOf", upstreamURL)
+	deliveryGit(t, root, "checkout", "-b", "feature")
+	head := commitDeliveryChange(t, root, "feat(cli): fork feature push")
+	mainBefore := deliveryGit(t, remote, "rev-parse", "refs/heads/main")
+
+	result, err := New(Options{Dir: root}).Push(context.Background(), types.PushRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TargetRef != "refs/heads/feature" || result.Status != types.GuardDelivered {
+		t.Fatalf("result = %+v", result)
+	}
+	if got := deliveryGit(t, remote, "rev-parse", "refs/heads/feature"); got != head {
+		t.Fatalf("remote feature = %s, want %s", got, head)
+	}
+	if got := deliveryGit(t, remote, "rev-parse", "refs/heads/main"); got != mainBefore {
+		t.Fatalf("remote main changed: %s -> %s", mainBefore, got)
+	}
+}
+
+func TestPushGitHubFanciveForkCheckoutBlocksMismatchedTrackingBranch(t *testing.T) {
+	root, remote := setupDeliveryRepo(t, "git@github.com:fancive/example.git")
+	const upstreamURL = "https://github.com/parent/example.git"
+	deliveryGit(t, root, "remote", "add", "upstream", upstreamURL)
+	deliveryGit(t, root, "config", "--add", "url."+remote+".insteadOf", upstreamURL)
+	deliveryGit(t, root, "checkout", "-b", "local-feature")
+	head := deliveryGit(t, root, "rev-parse", "HEAD")
+	deliveryGit(t, root, "update-ref", "refs/remotes/origin/pr-feature", head)
+	deliveryGit(t, root, "branch", "--set-upstream-to=origin/pr-feature", "local-feature")
+	mainBefore := deliveryGit(t, remote, "rev-parse", "refs/heads/main")
+
+	_, err := New(Options{Dir: root}).Push(context.Background(), types.PushRequest{})
+	if err == nil || !strings.Contains(err.Error(), "tracks origin/pr-feature") {
+		t.Fatalf("push error = %v", err)
+	}
+	if got := deliveryGit(t, remote, "rev-parse", "refs/heads/main"); got != mainBefore {
+		t.Fatalf("remote main changed: %s -> %s", mainBefore, got)
+	}
+}
+
 func TestPushRejectsUnexpectedHeadBeforeWritingRemote(t *testing.T) {
 	root, remote := setupDeliveryRepo(t, "git@github.com:fancive/example.git")
 	commitDeliveryChange(t, root, "feat(cli): expected head")

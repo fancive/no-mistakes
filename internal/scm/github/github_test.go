@@ -23,3 +23,42 @@ func TestSameRepositoryAcrossURLForms(t *testing.T) {
 		t.Fatal("different repositories matched")
 	}
 }
+
+func TestForkOf(t *testing.T) {
+	tests := []struct {
+		name     string
+		fork     string
+		upstream string
+		want     bool
+	}{
+		{
+			name:     "common github fork layout",
+			fork:     "git@github.com:fancive/prometheus.git",
+			upstream: "https://github.com/prometheus/prometheus.git",
+			want:     true,
+		},
+		{
+			name:     "same repository",
+			fork:     "git@github.com:fancive/prometheus.git",
+			upstream: "https://github.com/fancive/prometheus.git",
+		},
+		{
+			name:     "different repository name",
+			fork:     "git@github.com:fancive/prometheus.git",
+			upstream: "https://github.com/prometheus/node_exporter.git",
+		},
+		{
+			name:     "invalid upstream",
+			fork:     "git@github.com:fancive/prometheus.git",
+			upstream: "not-a-remote",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := ForkOf(test.fork, test.upstream); got != test.want {
+				t.Fatalf("ForkOf(%q, %q) = %v, want %v", test.fork, test.upstream, got, test.want)
+			}
+		})
+	}
+}

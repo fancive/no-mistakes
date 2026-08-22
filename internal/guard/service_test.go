@@ -182,6 +182,38 @@ func TestNonFanciveGitHubDefaultBranchIsBlocked(t *testing.T) {
 	}
 }
 
+func TestFanciveForkCheckoutUsesFeaturePushTarget(t *testing.T) {
+	root, remote := setupGuardRepo(t, "git@github.com:fancive/example.git")
+	const upstreamURL = "https://github.com/parent/example.git"
+	gitCmd(t, root, "remote", "add", "upstream", upstreamURL)
+	gitCmd(t, root, "config", "--add", "url."+remote+".insteadOf", upstreamURL)
+	gitCmd(t, root, "checkout", "-b", "feature")
+
+	result, err := New(Options{Dir: root}).Check(context.Background(), types.CheckRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TargetRef != "refs/heads/feature" || result.Branch != "feature" {
+		t.Fatalf("fork checkout result = %+v", result)
+	}
+}
+
+func TestFanciveForkCheckoutBlocksMismatchedTrackingBranch(t *testing.T) {
+	root, remote := setupGuardRepo(t, "git@github.com:fancive/example.git")
+	const upstreamURL = "https://github.com/parent/example.git"
+	gitCmd(t, root, "remote", "add", "upstream", upstreamURL)
+	gitCmd(t, root, "config", "--add", "url."+remote+".insteadOf", upstreamURL)
+	gitCmd(t, root, "checkout", "-b", "local-feature")
+	head := gitCmd(t, root, "rev-parse", "HEAD")
+	gitCmd(t, root, "update-ref", "refs/remotes/origin/pr-feature", head)
+	gitCmd(t, root, "branch", "--set-upstream-to=origin/pr-feature", "local-feature")
+
+	_, err := New(Options{Dir: root}).Check(context.Background(), types.CheckRequest{})
+	if err == nil || !strings.Contains(err.Error(), "tracks origin/pr-feature") {
+		t.Fatalf("check error = %v", err)
+	}
+}
+
 func TestLintFailureLeavesHeadAndIndexUnchanged(t *testing.T) {
 	root, _ := setupGuardRepo(t, "git@github.com:fancive/example.git")
 	writeLintConfig(t, root)

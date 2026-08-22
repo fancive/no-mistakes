@@ -55,6 +55,8 @@ type repositoryPlan struct {
 	root            string
 	remoteURL       string
 	pushURL         string
+	forkUpstreamURL string
+	trackingRef     string
 	provider        scm.Provider
 	branch          string
 	head            string
@@ -141,6 +143,7 @@ func (s *Service) Commit(ctx context.Context, request types.CommitRequest) (type
 		return types.GuardResult{}, fmt.Errorf("revalidate repository after lint: %w", err)
 	}
 	if fresh.root != plan.root || fresh.remoteURL != plan.remoteURL || fresh.pushURL != plan.pushURL || fresh.provider != plan.provider ||
+		fresh.forkUpstreamURL != plan.forkUpstreamURL || fresh.trackingRef != plan.trackingRef ||
 		fresh.branch != plan.branch || fresh.head != plan.head || fresh.defaultName != plan.defaultName || fresh.baseSHA != plan.baseSHA ||
 		fresh.targetSHA != plan.targetSHA || fresh.targetRef != plan.targetRef || fresh.lintCommand != plan.lintCommand || fresh.language != plan.language {
 		return types.GuardResult{}, fmt.Errorf("repository branch, HEAD, provider, or push target changed during lint; rerun check")
@@ -254,16 +257,36 @@ func (s *Service) inspect(ctx context.Context) (repositoryPlan, error) {
 	}
 	defaultBranch := ""
 	targetBranch := branch
+	baseRemote := "origin"
+	forkUpstreamURL := ""
+	trackingRef := ""
 	if provider == scm.ProviderGitHub {
-		defaultBranch, err = strictDefaultBranch(ctx, root)
+		forkLayout, isForkCheckout, layoutErr := githubscm.DetectForkLayout(ctx, root, endpoint.FetchLiteral)
+		if layoutErr != nil {
+			return repositoryPlan{}, fmt.Errorf("resolve GitHub fork layout: %w", layoutErr)
+		}
+		if isForkCheckout {
+			baseRemote = forkLayout.UpstreamRemote
+			forkUpstreamURL = forkLayout.UpstreamURL
+		}
+		defaultBranch, err = strictDefaultBranch(ctx, root, baseRemote)
 		if err != nil {
 			return repositoryPlan{}, err
 		}
-		directMain := githubscm.DirectMainRemote(endpoint.FetchLiteral) && githubscm.SameRepository(endpoint.PushLiteral, endpoint.FetchLiteral)
+		directMain := !isForkCheckout && githubscm.DirectMainRemote(endpoint.FetchLiteral) && githubscm.SameRepository(endpoint.PushLiteral, endpoint.FetchLiteral)
 		if directMain {
 			targetBranch = defaultBranch
-		} else if branch == defaultBranch {
-			return repositoryPlan{}, fmt.Errorf("GitHub repositories outside fancive/* must use an attached feature branch, not %s", defaultBranch)
+		} else {
+			if branch == defaultBranch {
+				return repositoryPlan{}, fmt.Errorf("GitHub repositories outside fancive/* must use an attached feature branch, not %s", defaultBranch)
+			}
+			trackingRef, err = githubscm.FeatureTrackingRef(ctx, root, branch)
+			if err != nil {
+				return repositoryPlan{}, err
+			}
+			if trackingRef != "" && trackingRef != "origin/"+branch {
+				return repositoryPlan{}, fmt.Errorf("attached feature branch %s tracks %s; align it with origin/%s before delivery", branch, trackingRef, branch)
+			}
 		}
 	}
 	targetRef := "refs/heads/" + targetBranch
@@ -278,7 +301,7 @@ func (s *Service) inspect(ctx context.Context) (repositoryPlan, error) {
 	if provider == scm.ProviderICode {
 		targetRef = "refs/for/" + branch
 	} else if targetBranch != defaultBranch || endpoint.PushLiteral != endpoint.FetchLiteral {
-		baseSHA, err = git.LsRemote(ctx, root, "origin", "refs/heads/"+defaultBranch)
+		baseSHA, err = git.LsRemote(ctx, root, baseRemote, "refs/heads/"+defaultBranch)
 		if err != nil || strings.TrimSpace(baseSHA) == "" {
 			if err != nil {
 				return repositoryPlan{}, fmt.Errorf("resolve remote default branch refs/heads/%s: %w", defaultBranch, err)
@@ -297,7 +320,7 @@ func (s *Service) inspect(ctx context.Context) (repositoryPlan, error) {
 		icodePolicyHash = repoConfig.ICodePolicyHash(icode.RepoPath(endpoint.FetchLiteral), branch)
 	}
 	return repositoryPlan{
-		root: root, remoteURL: endpoint.FetchLiteral, pushURL: endpoint.PushEffective,
+		root: root, remoteURL: endpoint.FetchLiteral, pushURL: endpoint.PushEffective, forkUpstreamURL: forkUpstreamURL, trackingRef: trackingRef,
 		provider: provider, branch: branch, head: head,
 		defaultName: defaultBranch, baseSHA: baseSHA, targetSHA: remoteTarget, targetRef: targetRef,
 		lintCommand: strings.TrimSpace(repoConfig.Commands.Lint), language: repoConfig.Language(),
@@ -343,8 +366,8 @@ func commitPlan(provider scm.Provider, hookVerified bool) (author, hook string, 
 	return author, hook, changeIDRequired
 }
 
-func strictDefaultBranch(ctx context.Context, root string) (string, error) {
-	out, err := git.Run(ctx, root, "ls-remote", "--symref", "origin", "HEAD")
+func strictDefaultBranch(ctx context.Context, root, remote string) (string, error) {
+	out, err := git.Run(ctx, root, "ls-remote", "--symref", remote, "HEAD")
 	if err != nil {
 		return "", fmt.Errorf("resolve remote default branch: %w", err)
 	}
