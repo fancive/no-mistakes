@@ -215,6 +215,24 @@ func TestLeanServiceErrorsAreStructuredBlockers(t *testing.T) {
 	}
 }
 
+func TestLeanLintFailureCannotBeMisclassifiedByCapturedTestOutput(t *testing.T) {
+	service := &fakeLeanService{
+		err:          errors.New("repository lint failed with exit code 2: test output mentions origin and refs/heads/main"),
+		commitResult: types.GuardResult{OutputLanguage: "zh-CN"},
+	}
+	output, err := executeLean(t, service, "commit", "--file", "x", "--message", "feat: x")
+	if err == nil {
+		t.Fatalf("lint failure succeeded:\n%s", output)
+	}
+	assertLeanFields(t, output,
+		"schema_version: 1", "command: commit", "status: blocked",
+		"error_code: lint_failed", "Lint 未通过，未创建提交",
+	)
+	if strings.Contains(output, "error_code: remote_unverified") {
+		t.Fatalf("captured test output changed lint classification:\n%s", output)
+	}
+}
+
 func TestLeanRemovedCommandsReturnMigrationGuidanceWithoutCallingService(t *testing.T) {
 	for _, name := range []string{"init", "eject", "daemon", "attach", "rerun", "status", "sync", "runs", "stats", "eval", "axi"} {
 		t.Run(name, func(t *testing.T) {

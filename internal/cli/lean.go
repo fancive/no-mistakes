@@ -259,6 +259,11 @@ func currentOutputLanguage() string {
 func classifyLeanError(message string) string {
 	lower := strings.ToLower(message)
 	switch {
+	case strings.Contains(lower, "repository lint"), strings.Contains(lower, "lint file"), strings.Contains(lower, "lint command"):
+		// Lint errors can embed arbitrary tool and test output. Classify the
+		// outer operation before scanning that captured output for incidental
+		// words such as origin, remote, or refs/heads.
+		return "lint_failed"
 	case strings.Contains(lower, "non-fast-forward"):
 		return "non_fast_forward"
 	case strings.Contains(lower, "remote"), strings.Contains(lower, "origin"), strings.Contains(lower, "refs/heads"), strings.Contains(lower, "push url"):
