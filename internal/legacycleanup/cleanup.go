@@ -431,7 +431,7 @@ func ownedPathTarget(root, kind, path string) (Target, string, bool) {
 	if !physicalInsideRoot(root, path) {
 		return Target{}, "managed path physically escapes legacy root: " + path, false
 	}
-	fingerprint, err := fingerprintPath(path)
+	fingerprint, err := targetFingerprint(kind, path)
 	if err != nil {
 		return Target{}, "fingerprint managed path: " + err.Error(), false
 	}
@@ -467,7 +467,7 @@ func (s *Service) applyTarget(ctx context.Context, root string, target Target) e
 	if target.Kind != "service" && !physicalInsideRoot(root, target.Path) {
 		return fmt.Errorf("path physically escapes legacy root")
 	}
-	current, err := fingerprintPath(target.Path)
+	current, err := targetFingerprint(target.Kind, target.Path)
 	if err != nil {
 		return err
 	}
@@ -483,6 +483,19 @@ func (s *Service) applyTarget(ctx context.Context, root string, target Target) e
 }
 
 func fingerprintPath(path string) (string, error) {
+	return fingerprintPathWithModTime(path, true)
+}
+
+// targetFingerprint keeps the database targets content-bound while ignoring
+// mtimes. Opening a WAL database read-only updates state.sqlite-shm's mtime on
+// macOS even when its bytes do not change; including that timestamp made a
+// freshly printed cleanup plan impossible to confirm. All non-database targets
+// retain the stricter metadata-plus-content fingerprint.
+func targetFingerprint(kind, path string) (string, error) {
+	return fingerprintPathWithModTime(path, kind != "database")
+}
+
+func fingerprintPathWithModTime(path string, includeModTime bool) (string, error) {
 	var entries []string
 	err := filepath.WalkDir(path, func(current string, entry os.DirEntry, err error) error {
 		if err != nil {
@@ -496,7 +509,10 @@ func fingerprintPath(path string) (string, error) {
 		if err != nil {
 			return err
 		}
-		line := filepath.ToSlash(rel) + "\x00" + info.Mode().String() + "\x00" + strconv.FormatInt(info.Size(), 10) + "\x00" + strconv.FormatInt(info.ModTime().UnixNano(), 10)
+		line := filepath.ToSlash(rel) + "\x00" + info.Mode().String() + "\x00" + strconv.FormatInt(info.Size(), 10)
+		if includeModTime {
+			line += "\x00" + strconv.FormatInt(info.ModTime().UnixNano(), 10)
+		}
 		if info.Mode()&os.ModeSymlink != 0 {
 			link, err := os.Readlink(current)
 			if err != nil {

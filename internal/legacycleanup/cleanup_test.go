@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 type fakeStateReader struct {
@@ -137,6 +138,45 @@ func TestConfirmRevalidatesHashAndPreservesUnrelatedState(t *testing.T) {
 	}
 	if got := cleanupGit(t, repo, "remote"); strings.Contains(got, "no-mistakes") || !strings.Contains(got, "origin") || !strings.Contains(got, "custom") {
 		t.Fatalf("remotes after cleanup:\n%s", got)
+	}
+}
+
+func TestPlanHashIgnoresSQLiteMtimeButStillBindsContent(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "state.sqlite")
+	shmPath := dbPath + "-shm"
+	for path, content := range map[string]string{dbPath: "database", shmPath: "one"} {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	service := New(Options{
+		Root: root, Reader: fakeStateReader{}, ProcessAlive: func(int) bool { return false }, ServiceFiles: []string{},
+	})
+	before, err := service.Plan(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	future := time.Now().Add(time.Hour)
+	if err := os.Chtimes(shmPath, future, future); err != nil {
+		t.Fatal(err)
+	}
+	afterMtime, err := service.Plan(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterMtime.Hash != before.Hash {
+		t.Fatalf("SQLite-only mtime changed plan hash: %s -> %s", before.Hash, afterMtime.Hash)
+	}
+	if err := os.WriteFile(shmPath, []byte("two"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	afterContent, err := service.Plan(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterContent.Hash == before.Hash {
+		t.Fatal("SQLite content change did not change plan hash")
 	}
 }
 

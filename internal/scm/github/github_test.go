@@ -62,3 +62,19 @@ func TestForkOf(t *testing.T) {
 		})
 	}
 }
+
+func TestNetworkEndpointUsesGitHubSSHOver443OnlyForDefaultSSH(t *testing.T) {
+	tests := map[string]string{
+		"git@github.com:fancive/no-mistakes.git":               "ssh://git@ssh.github.com:443/fancive/no-mistakes.git",
+		"ssh://git@github.com/fancive/no-mistakes.git":         "ssh://git@ssh.github.com:443/fancive/no-mistakes.git",
+		"ssh://git@github.com:22/fancive/no-mistakes.git":      "ssh://git@ssh.github.com:443/fancive/no-mistakes.git",
+		"ssh://git@github.com:2222/fancive/no-mistakes.git":    "ssh://git@github.com:2222/fancive/no-mistakes.git",
+		"ssh://git@ssh.github.com:443/fancive/no-mistakes.git": "ssh://git@ssh.github.com:443/fancive/no-mistakes.git",
+		"https://github.com/fancive/no-mistakes.git":           "https://github.com/fancive/no-mistakes.git",
+	}
+	for remote, want := range tests {
+		if got := NetworkEndpoint(remote); got != want {
+			t.Errorf("NetworkEndpoint(%q) = %q, want %q", remote, got, want)
+		}
+	}
+}

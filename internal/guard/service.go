@@ -52,23 +52,27 @@ func New(options Options) *Service {
 }
 
 type repositoryPlan struct {
-	root            string
-	remoteURL       string
-	pushURL         string
-	forkUpstreamURL string
-	trackingRef     string
-	provider        scm.Provider
-	branch          string
-	head            string
-	defaultName     string
-	baseSHA         string
-	targetSHA       string
-	targetRef       string
-	lintCommand     string
-	language        string
-	icodeAutoSubmit bool
-	icodeReviewers  []string
-	icodePolicyHash string
+	root                     string
+	remoteURL                string
+	fetchURL                 string
+	pushURL                  string
+	readEndpoint             string
+	pushEndpoint             string
+	forkUpstreamURL          string
+	forkUpstreamEffectiveURL string
+	trackingRef              string
+	provider                 scm.Provider
+	branch                   string
+	head                     string
+	defaultName              string
+	baseSHA                  string
+	targetSHA                string
+	targetRef                string
+	lintCommand              string
+	language                 string
+	icodeAutoSubmit          bool
+	icodeReviewers           []string
+	icodePolicyHash          string
 }
 
 // Check validates without staging or committing. The configured lint command
@@ -142,8 +146,9 @@ func (s *Service) Commit(ctx context.Context, request types.CommitRequest) (type
 	if err != nil {
 		return types.GuardResult{}, fmt.Errorf("revalidate repository after lint: %w", err)
 	}
-	if fresh.root != plan.root || fresh.remoteURL != plan.remoteURL || fresh.pushURL != plan.pushURL || fresh.provider != plan.provider ||
-		fresh.forkUpstreamURL != plan.forkUpstreamURL || fresh.trackingRef != plan.trackingRef ||
+	if fresh.root != plan.root || fresh.remoteURL != plan.remoteURL || fresh.fetchURL != plan.fetchURL || fresh.pushURL != plan.pushURL ||
+		fresh.readEndpoint != plan.readEndpoint || fresh.pushEndpoint != plan.pushEndpoint || fresh.provider != plan.provider ||
+		fresh.forkUpstreamURL != plan.forkUpstreamURL || fresh.forkUpstreamEffectiveURL != plan.forkUpstreamEffectiveURL || fresh.trackingRef != plan.trackingRef ||
 		fresh.branch != plan.branch || fresh.head != plan.head || fresh.defaultName != plan.defaultName || fresh.baseSHA != plan.baseSHA ||
 		fresh.targetSHA != plan.targetSHA || fresh.targetRef != plan.targetRef || fresh.lintCommand != plan.lintCommand || fresh.language != plan.language {
 		return types.GuardResult{}, fmt.Errorf("repository branch, HEAD, provider, or push target changed during lint; rerun check")
@@ -257,8 +262,10 @@ func (s *Service) inspect(ctx context.Context) (repositoryPlan, error) {
 	}
 	defaultBranch := ""
 	targetBranch := branch
-	baseRemote := "origin"
+	baseEffectiveURL := endpoint.FetchEffective
+	pushEndpoint := endpoint.PushEffective
 	forkUpstreamURL := ""
+	forkUpstreamEffectiveURL := ""
 	trackingRef := ""
 	if provider == scm.ProviderGitHub {
 		forkLayout, isForkCheckout, layoutErr := githubscm.DetectForkLayout(ctx, root, endpoint.FetchLiteral)
@@ -266,10 +273,13 @@ func (s *Service) inspect(ctx context.Context) (repositoryPlan, error) {
 			return repositoryPlan{}, fmt.Errorf("resolve GitHub fork layout: %w", layoutErr)
 		}
 		if isForkCheckout {
-			baseRemote = forkLayout.UpstreamRemote
+			baseEffectiveURL = forkLayout.UpstreamEffectiveURL
 			forkUpstreamURL = forkLayout.UpstreamURL
+			forkUpstreamEffectiveURL = forkLayout.UpstreamEffectiveURL
 		}
-		defaultBranch, err = strictDefaultBranch(ctx, root, baseRemote)
+		baseEffectiveURL = githubscm.NetworkEndpoint(baseEffectiveURL)
+		pushEndpoint = githubscm.NetworkEndpoint(pushEndpoint)
+		defaultBranch, err = strictDefaultBranch(ctx, root, baseEffectiveURL)
 		if err != nil {
 			return repositoryPlan{}, err
 		}
@@ -290,7 +300,7 @@ func (s *Service) inspect(ctx context.Context) (repositoryPlan, error) {
 		}
 	}
 	targetRef := "refs/heads/" + targetBranch
-	remoteTarget, err := git.LsRemoteEndpoint(ctx, root, endpoint.PushEffective, targetRef)
+	remoteTarget, err := git.LsRemoteEndpoint(ctx, root, pushEndpoint, targetRef)
 	if err != nil {
 		return repositoryPlan{}, fmt.Errorf("verify remote target %s: %w", targetRef, err)
 	}
@@ -301,7 +311,7 @@ func (s *Service) inspect(ctx context.Context) (repositoryPlan, error) {
 	if provider == scm.ProviderICode {
 		targetRef = "refs/for/" + branch
 	} else if targetBranch != defaultBranch || endpoint.PushLiteral != endpoint.FetchLiteral {
-		baseSHA, err = git.LsRemote(ctx, root, baseRemote, "refs/heads/"+defaultBranch)
+		baseSHA, err = git.LsRemoteEndpoint(ctx, root, baseEffectiveURL, "refs/heads/"+defaultBranch)
 		if err != nil || strings.TrimSpace(baseSHA) == "" {
 			if err != nil {
 				return repositoryPlan{}, fmt.Errorf("resolve remote default branch refs/heads/%s: %w", defaultBranch, err)
@@ -320,7 +330,9 @@ func (s *Service) inspect(ctx context.Context) (repositoryPlan, error) {
 		icodePolicyHash = repoConfig.ICodePolicyHash(icode.RepoPath(endpoint.FetchLiteral), branch)
 	}
 	return repositoryPlan{
-		root: root, remoteURL: endpoint.FetchLiteral, pushURL: endpoint.PushEffective, forkUpstreamURL: forkUpstreamURL, trackingRef: trackingRef,
+		root: root, remoteURL: endpoint.FetchLiteral, fetchURL: endpoint.FetchEffective, pushURL: endpoint.PushEffective,
+		readEndpoint: baseEffectiveURL, pushEndpoint: pushEndpoint,
+		forkUpstreamURL: forkUpstreamURL, forkUpstreamEffectiveURL: forkUpstreamEffectiveURL, trackingRef: trackingRef,
 		provider: provider, branch: branch, head: head,
 		defaultName: defaultBranch, baseSHA: baseSHA, targetSHA: remoteTarget, targetRef: targetRef,
 		lintCommand: strings.TrimSpace(repoConfig.Commands.Lint), language: repoConfig.Language(),
@@ -366,8 +378,8 @@ func commitPlan(provider scm.Provider, hookVerified bool) (author, hook string, 
 	return author, hook, changeIDRequired
 }
 
-func strictDefaultBranch(ctx context.Context, root, remote string) (string, error) {
-	out, err := git.Run(ctx, root, "ls-remote", "--symref", remote, "HEAD")
+func strictDefaultBranch(ctx context.Context, root, endpoint string) (string, error) {
+	out, err := git.LsRemoteSymrefEndpoint(ctx, root, endpoint, "HEAD")
 	if err != nil {
 		return "", fmt.Errorf("resolve remote default branch: %w", err)
 	}

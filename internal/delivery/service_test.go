@@ -147,6 +147,33 @@ func TestPushGitHubFanciveForkCheckoutCreatesOnlyFeatureBranch(t *testing.T) {
 	}
 }
 
+func TestPushGitHubFanciveForkCheckoutUsesSSHOver443Endpoint(t *testing.T) {
+	const (
+		originURL        = "git@github.com:fancive/example.git"
+		upstreamURL      = "git@github.com:parent/example.git"
+		originEndpoint   = "ssh://git@ssh.github.com:443/fancive/example.git"
+		upstreamEndpoint = "ssh://git@ssh.github.com:443/parent/example.git"
+	)
+	root, remote := setupDeliveryRepo(t, originURL)
+	deliveryGit(t, root, "config", "--unset-all", "url."+remote+".insteadOf")
+	deliveryGit(t, root, "config", "--add", "url."+remote+".insteadOf", originEndpoint)
+	deliveryGit(t, root, "config", "--add", "url."+remote+".insteadOf", upstreamEndpoint)
+	deliveryGit(t, root, "remote", "add", "upstream", upstreamURL)
+	deliveryGit(t, root, "checkout", "-b", "feature")
+	head := commitDeliveryChange(t, root, "feat(cli): fork feature push over 443")
+
+	result, err := New(Options{Dir: root}).Push(context.Background(), types.PushRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TargetRef != "refs/heads/feature" || result.Status != types.GuardDelivered {
+		t.Fatalf("result = %+v", result)
+	}
+	if got := deliveryGit(t, remote, "rev-parse", "refs/heads/feature"); got != head {
+		t.Fatalf("remote feature = %s, want %s", got, head)
+	}
+}
+
 func TestPushGitHubFanciveForkCheckoutBlocksMismatchedTrackingBranch(t *testing.T) {
 	root, remote := setupDeliveryRepo(t, "git@github.com:fancive/example.git")
 	const upstreamURL = "https://github.com/parent/example.git"

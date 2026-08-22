@@ -76,7 +76,9 @@ lint or changed assumption leaves HEAD and the index unchanged.
 ### `no-mistakes push [--expected-head SHA]`
 
 Re-resolve HEAD, provider, branch, remote and target immediately before mutation. Push only
-the exact verified commit:
+the exact verified commit. Literal remotes remain policy inputs; default-port GitHub SSH
+traffic is bound to the same repository through `ssh.github.com:443`, while explicit custom
+ports are left unchanged:
 
 | Provider/mode | Push behavior | Tail behavior |
 |---|---|---|

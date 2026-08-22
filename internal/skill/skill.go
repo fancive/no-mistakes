@@ -88,6 +88,8 @@ no-mistakes push --expected-head <commit-sha>
 ` + "```" + `
 
 Push always re-resolves the exact current HEAD and live remote. It never force-pushes.
+Default-port GitHub SSH network operations use ` + "`ssh.github.com:443`" + ` without
+rewriting the repository's literal remotes; explicit custom ports remain unchanged.
 
 - fancive GitHub repositories without a conventional ` + "`origin=fork, upstream=parent`" + `
   layout: regular fast-forward push to the resolved default branch;

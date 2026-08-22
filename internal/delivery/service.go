@@ -86,21 +86,25 @@ func New(options Options) *Service {
 }
 
 type pushPlan struct {
-	root                  string
-	remoteURL             string
-	pushURL               string
-	forkUpstreamURL       string
-	trackingRef           string
-	provider              scm.Provider
-	branch                string
-	head                  string
-	defaultBranch         string
-	targetRef             string
-	directMain            bool
-	repoConfig            *config.RepoConfig
-	language              string
-	icodePolicyHash       string
-	icodeSubmitAuthorized bool
+	root                     string
+	remoteURL                string
+	fetchURL                 string
+	pushURL                  string
+	readEndpoint             string
+	pushEndpoint             string
+	forkUpstreamURL          string
+	forkUpstreamEffectiveURL string
+	trackingRef              string
+	provider                 scm.Provider
+	branch                   string
+	head                     string
+	defaultBranch            string
+	targetRef                string
+	directMain               bool
+	repoConfig               *config.RepoConfig
+	language                 string
+	icodePolicyHash          string
+	icodeSubmitAuthorized    bool
 }
 
 // Push re-resolves every mutable assumption and dispatches provider delivery.
@@ -183,8 +187,10 @@ func (s *Service) inspect(ctx context.Context) (pushPlan, error) {
 		return pushPlan{}, fmt.Errorf("iCode origin push URL targets a different repository")
 	}
 	defaultBranch := ""
-	baseRemote := "origin"
+	baseEffectiveURL := endpoint.FetchEffective
+	pushEndpoint := endpoint.PushEffective
 	forkUpstreamURL := ""
+	forkUpstreamEffectiveURL := ""
 	trackingRef := ""
 	isForkCheckout := false
 	if provider == scm.ProviderGitHub {
@@ -194,10 +200,13 @@ func (s *Service) inspect(ctx context.Context) (pushPlan, error) {
 		}
 		isForkCheckout = detectedFork
 		if isForkCheckout {
-			baseRemote = forkLayout.UpstreamRemote
+			baseEffectiveURL = forkLayout.UpstreamEffectiveURL
 			forkUpstreamURL = forkLayout.UpstreamURL
+			forkUpstreamEffectiveURL = forkLayout.UpstreamEffectiveURL
 		}
-		defaultBranch, err = strictDefaultBranch(ctx, root, baseRemote)
+		baseEffectiveURL = githubscm.NetworkEndpoint(baseEffectiveURL)
+		pushEndpoint = githubscm.NetworkEndpoint(pushEndpoint)
+		defaultBranch, err = strictDefaultBranch(ctx, root, baseEffectiveURL)
 		if err != nil {
 			return pushPlan{}, err
 		}
@@ -232,7 +241,9 @@ func (s *Service) inspect(ctx context.Context) (pushPlan, error) {
 		icodePolicyHash = repoConfig.ICodePolicyHash(icode.RepoPath(remoteURL), branch)
 	}
 	return pushPlan{
-		root: root, remoteURL: remoteURL, pushURL: endpoint.PushEffective, forkUpstreamURL: forkUpstreamURL, trackingRef: trackingRef,
+		root: root, remoteURL: remoteURL, fetchURL: endpoint.FetchEffective, pushURL: endpoint.PushEffective,
+		readEndpoint: baseEffectiveURL, pushEndpoint: pushEndpoint,
+		forkUpstreamURL: forkUpstreamURL, forkUpstreamEffectiveURL: forkUpstreamEffectiveURL, trackingRef: trackingRef,
 		provider: provider, branch: branch, head: head,
 		defaultBranch: defaultBranch, targetRef: targetRef, directMain: directMain, repoConfig: repoConfig,
 		language: repoConfig.Language(), icodePolicyHash: icodePolicyHash,
@@ -244,7 +255,7 @@ func (s *Service) pushGitHub(ctx context.Context, plan pushPlan) (types.GuardRes
 	if err != nil {
 		return types.GuardResult{}, err
 	}
-	remoteHead, err := git.LsRemoteEndpoint(ctx, plan.root, plan.pushURL, plan.targetRef)
+	remoteHead, err := git.LsRemoteEndpoint(ctx, plan.root, plan.pushEndpoint, plan.targetRef)
 	if err != nil {
 		return types.GuardResult{}, fmt.Errorf("inspect GitHub target %s: %w", plan.targetRef, err)
 	}
@@ -252,7 +263,7 @@ func (s *Service) pushGitHub(ctx context.Context, plan pushPlan) (types.GuardRes
 		return types.GuardResult{}, fmt.Errorf("direct-main target %s does not exist", plan.targetRef)
 	}
 	if remoteHead != "" && !strings.EqualFold(remoteHead, plan.head) {
-		if err := git.FetchEndpoint(ctx, plan.root, plan.pushURL, plan.targetRef); err != nil {
+		if err := git.FetchEndpoint(ctx, plan.root, plan.pushEndpoint, plan.targetRef); err != nil {
 			return types.GuardResult{}, fmt.Errorf("fetch GitHub target %s: %w", plan.targetRef, err)
 		}
 		if _, err := git.Run(ctx, plan.root, "merge-base", "--is-ancestor", remoteHead, plan.head); err != nil {
@@ -264,7 +275,7 @@ func (s *Service) pushGitHub(ctx context.Context, plan pushPlan) (types.GuardRes
 		if err != nil {
 			return types.GuardResult{}, err
 		}
-		freshRemoteHead, err := git.LsRemoteEndpoint(ctx, plan.root, plan.pushURL, plan.targetRef)
+		freshRemoteHead, err := git.LsRemoteEndpoint(ctx, plan.root, plan.pushEndpoint, plan.targetRef)
 		if err != nil {
 			return types.GuardResult{}, fmt.Errorf("recheck GitHub target %s: %w", plan.targetRef, err)
 		}
@@ -272,18 +283,18 @@ func (s *Service) pushGitHub(ctx context.Context, plan pushPlan) (types.GuardRes
 			return types.GuardResult{}, fmt.Errorf("direct-main target %s disappeared before push", plan.targetRef)
 		}
 		if freshRemoteHead != "" && !strings.EqualFold(freshRemoteHead, plan.head) {
-			if err := git.FetchEndpoint(ctx, plan.root, plan.pushURL, plan.targetRef); err != nil {
+			if err := git.FetchEndpoint(ctx, plan.root, plan.pushEndpoint, plan.targetRef); err != nil {
 				return types.GuardResult{}, fmt.Errorf("recheck GitHub target %s: %w", plan.targetRef, err)
 			}
 			if _, err := git.Run(ctx, plan.root, "merge-base", "--is-ancestor", freshRemoteHead, plan.head); err != nil {
 				return types.GuardResult{}, fmt.Errorf("non-fast-forward GitHub push refused for %s", plan.targetRef)
 			}
 		}
-		if err := git.PushCommitEndpoint(ctx, plan.root, plan.pushURL, plan.head, plan.targetRef); err != nil {
+		if err := git.PushCommitEndpoint(ctx, plan.root, plan.pushEndpoint, plan.head, plan.targetRef); err != nil {
 			return types.GuardResult{}, fmt.Errorf("push exact HEAD to GitHub %s: %w", plan.targetRef, err)
 		}
 	}
-	verified, err := git.LsRemoteEndpoint(ctx, plan.root, plan.pushURL, plan.targetRef)
+	verified, err := git.LsRemoteEndpoint(ctx, plan.root, plan.pushEndpoint, plan.targetRef)
 	if err != nil || !strings.EqualFold(verified, plan.head) {
 		if err != nil {
 			return types.GuardResult{}, fmt.Errorf("verify GitHub push %s: %w", plan.targetRef, err)
@@ -307,7 +318,7 @@ func (s *Service) pushGitHub(ctx context.Context, plan pushPlan) (types.GuardRes
 
 func (s *Service) pushICode(ctx context.Context, plan pushPlan) (types.GuardResult, error) {
 	targetHeadRef := "refs/heads/" + plan.branch
-	targetHead, err := git.LsRemoteEndpoint(ctx, plan.root, plan.pushURL, targetHeadRef)
+	targetHead, err := git.LsRemoteEndpoint(ctx, plan.root, plan.pushEndpoint, targetHeadRef)
 	if err != nil {
 		return types.GuardResult{}, fmt.Errorf("verify iCode target %s: %w", targetHeadRef, err)
 	}
@@ -350,13 +361,13 @@ func (s *Service) pushICode(ctx context.Context, plan pushPlan) (types.GuardResu
 		if err != nil {
 			return types.GuardResult{}, err
 		}
-		if targetHead, err = git.LsRemoteEndpoint(ctx, plan.root, plan.pushURL, targetHeadRef); err != nil || strings.TrimSpace(targetHead) == "" {
+		if targetHead, err = git.LsRemoteEndpoint(ctx, plan.root, plan.pushEndpoint, targetHeadRef); err != nil || strings.TrimSpace(targetHead) == "" {
 			if err != nil {
 				return types.GuardResult{}, fmt.Errorf("recheck iCode target %s: %w", targetHeadRef, err)
 			}
 			return types.GuardResult{}, fmt.Errorf("iCode target %s disappeared; run $ipipe-pull-branch explicitly", targetHeadRef)
 		}
-		if err := git.PushCommitEndpoint(ctx, plan.root, plan.pushURL, plan.head, plan.targetRef); err != nil {
+		if err := git.PushCommitEndpoint(ctx, plan.root, plan.pushEndpoint, plan.head, plan.targetRef); err != nil {
 			return types.GuardResult{}, fmt.Errorf("push iCode review %s: %w", plan.targetRef, err)
 		}
 		for attempt := 0; attempt < 5 && review == nil; attempt++ {
@@ -382,8 +393,9 @@ func (s *Service) revalidate(ctx context.Context, expected pushPlan) (pushPlan, 
 	if err != nil {
 		return pushPlan{}, fmt.Errorf("revalidate delivery assumptions: %w", err)
 	}
-	if fresh.root != expected.root || fresh.remoteURL != expected.remoteURL || fresh.pushURL != expected.pushURL ||
-		fresh.forkUpstreamURL != expected.forkUpstreamURL || fresh.trackingRef != expected.trackingRef ||
+	if fresh.root != expected.root || fresh.remoteURL != expected.remoteURL || fresh.fetchURL != expected.fetchURL || fresh.pushURL != expected.pushURL ||
+		fresh.readEndpoint != expected.readEndpoint || fresh.pushEndpoint != expected.pushEndpoint ||
+		fresh.forkUpstreamURL != expected.forkUpstreamURL || fresh.forkUpstreamEffectiveURL != expected.forkUpstreamEffectiveURL || fresh.trackingRef != expected.trackingRef ||
 		fresh.provider != expected.provider || fresh.branch != expected.branch || fresh.head != expected.head ||
 		fresh.defaultBranch != expected.defaultBranch || fresh.targetRef != expected.targetRef || fresh.directMain != expected.directMain ||
 		fresh.repoConfig.Language() != expected.repoConfig.Language() || fresh.icodePolicyHash != expected.icodePolicyHash {
@@ -528,8 +540,8 @@ func defaultICodeHostFactory(options ICodeHostOptions) (ICodeHost, error) {
 	}), nil
 }
 
-func strictDefaultBranch(ctx context.Context, root, remote string) (string, error) {
-	out, err := git.Run(ctx, root, "ls-remote", "--symref", remote, "HEAD")
+func strictDefaultBranch(ctx context.Context, root, endpoint string) (string, error) {
+	out, err := git.LsRemoteSymrefEndpoint(ctx, root, endpoint, "HEAD")
 	if err != nil {
 		return "", fmt.Errorf("resolve remote default branch: %w", err)
 	}

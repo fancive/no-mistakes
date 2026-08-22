@@ -4,6 +4,7 @@ package github
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/kunchenguid/no-mistakes/internal/git"
@@ -12,8 +13,9 @@ import (
 
 // ForkLayout describes the conventional origin=fork, upstream=parent checkout.
 type ForkLayout struct {
-	UpstreamRemote string
-	UpstreamURL    string
+	UpstreamRemote       string
+	UpstreamURL          string
+	UpstreamEffectiveURL string
 }
 
 // RepoSlug extracts the first owner/name pair from HTTP, SSH URL, or scp form.
@@ -59,6 +61,32 @@ func ForkOf(fork, upstream string) bool {
 		strings.EqualFold(forkName, upstreamName)
 }
 
+// NetworkEndpoint moves only default-port github.com SSH URLs onto GitHub's
+// SSH-over-443 endpoint. Literal remotes remain the provider/policy authority;
+// this derived endpoint is used only for bound network reads and writes. An
+// explicitly configured non-default port or non-GitHub transport is preserved.
+func NetworkEndpoint(remote string) string {
+	value := strings.TrimSpace(remote)
+	lower := strings.ToLower(value)
+	defaultSSH := strings.HasPrefix(lower, "git@github.com:")
+	if strings.HasPrefix(lower, "ssh://") {
+		parsed, err := url.Parse(value)
+		if err != nil || !strings.EqualFold(parsed.Hostname(), "github.com") {
+			return value
+		}
+		port := parsed.Port()
+		defaultSSH = port == "" || port == "22"
+	}
+	if !defaultSSH {
+		return value
+	}
+	slug := RepoSlug(value)
+	if slug == "" {
+		return value
+	}
+	return "ssh://git@ssh.github.com:443/" + slug + ".git"
+}
+
 // DetectForkLayout recognizes the conventional GitHub fork checkout without
 // changing remotes. An ambiguous upstream remote fails closed so a personal
 // fork can never be mistaken for a direct-main repository.
@@ -89,7 +117,17 @@ func DetectForkLayout(ctx context.Context, root, originURL string) (ForkLayout, 
 	if scm.DetectProviderContext(ctx, upstreamURL) != scm.ProviderGitHub || !ForkOf(originURL, upstreamURL) {
 		return ForkLayout{}, false, nil
 	}
-	return ForkLayout{UpstreamRemote: "upstream", UpstreamURL: upstreamURL}, true, nil
+	effective, err := git.Run(ctx, root, "remote", "get-url", "--all", "upstream")
+	if err != nil {
+		return ForkLayout{}, false, fmt.Errorf("resolve effective upstream URL: %w", err)
+	}
+	effectiveURLs := strings.Fields(effective)
+	if len(effectiveURLs) != 1 {
+		return ForkLayout{}, false, fmt.Errorf("upstream resolves to %d effective URLs; exactly one is required", len(effectiveURLs))
+	}
+	return ForkLayout{
+		UpstreamRemote: "upstream", UpstreamURL: upstreamURL, UpstreamEffectiveURL: effectiveURLs[0],
+	}, true, nil
 }
 
 // FeatureTrackingRef returns the configured short upstream ref for an attached

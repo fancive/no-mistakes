@@ -76,7 +76,10 @@ capability token and never authorizes mutation.
 1. Re-resolve repository, provider, attached branch, HEAD, message and remote; do not reuse a
    prior check snapshot.
 2. Bind the operation to the immutable resolved HEAD SHA and exact target ref.
-3. Read the live remote immediately before mutation.
+3. Read the live remote immediately before mutation. Provider policy remains bound to the
+   literal configured URLs; default-port `github.com` SSH network operations use GitHub's
+   equivalent `ssh.github.com:443` endpoint without rewriting repository remotes. Explicit
+   custom ports are preserved.
 4. GitHub direct-main and feature delivery use a regular push only. A conventional
    `origin=fork, upstream=parent` checkout always uses feature delivery, even when the fork
    owner is `fancive`. A server-side concurrent update or non-fast-forward relationship is

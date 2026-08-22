@@ -67,20 +67,29 @@ func GetRemoteURL(ctx context.Context, dir, name string) (string, error) {
 }
 
 // RemoteEndpoint binds provider policy to the literal configured origin while
-// binding network reads/writes to Git's single effective push destination.
+// binding network reads/writes to Git's single effective fetch/push destinations.
 type RemoteEndpoint struct {
-	FetchLiteral  string
-	PushLiteral   string
-	PushEffective string
+	FetchLiteral   string
+	FetchEffective string
+	PushLiteral    string
+	PushEffective  string
 }
 
-// ResolveOriginEndpoint rejects ambiguous multiple push URLs. Callers can
-// validate PushLiteral as the same provider as FetchLiteral and then use the
-// immutable PushEffective URL instead of the mutable remote name for delivery.
+// ResolveOriginEndpoint rejects ambiguous multiple fetch or push URLs. Callers
+// validate the literal URLs as policy inputs, then use the immutable effective
+// URLs instead of the mutable remote name for network operations.
 func ResolveOriginEndpoint(ctx context.Context, dir string) (RemoteEndpoint, error) {
 	fetchLiteral, err := Run(ctx, dir, "config", "--get", "remote.origin.url")
 	if err != nil || strings.TrimSpace(fetchLiteral) == "" {
 		return RemoteEndpoint{}, fmt.Errorf("origin remote is missing")
+	}
+	fetchEffective, err := Run(ctx, dir, "remote", "get-url", "--all", "origin")
+	if err != nil {
+		return RemoteEndpoint{}, fmt.Errorf("resolve effective origin fetch URL: %w", err)
+	}
+	fetchValues := nonEmptyLines(fetchEffective)
+	if len(fetchValues) != 1 {
+		return RemoteEndpoint{}, fmt.Errorf("origin resolves to %d effective fetch URLs; exactly one is required", len(fetchValues))
 	}
 	pushLiteral := strings.TrimSpace(fetchLiteral)
 	if configured, configuredErr := Run(ctx, dir, "config", "--get-all", "remote.origin.pushurl"); configuredErr == nil && strings.TrimSpace(configured) != "" {
@@ -94,11 +103,14 @@ func ResolveOriginEndpoint(ctx context.Context, dir string) (RemoteEndpoint, err
 	if err != nil {
 		return RemoteEndpoint{}, fmt.Errorf("resolve effective origin push URL: %w", err)
 	}
-	values := nonEmptyLines(effective)
-	if len(values) != 1 {
-		return RemoteEndpoint{}, fmt.Errorf("origin resolves to %d effective push URLs; exactly one is required", len(values))
+	pushValues := nonEmptyLines(effective)
+	if len(pushValues) != 1 {
+		return RemoteEndpoint{}, fmt.Errorf("origin resolves to %d effective push URLs; exactly one is required", len(pushValues))
 	}
-	return RemoteEndpoint{FetchLiteral: strings.TrimSpace(fetchLiteral), PushLiteral: pushLiteral, PushEffective: values[0]}, nil
+	return RemoteEndpoint{
+		FetchLiteral: strings.TrimSpace(fetchLiteral), FetchEffective: fetchValues[0],
+		PushLiteral: pushLiteral, PushEffective: pushValues[0],
+	}, nil
 }
 
 func nonEmptyLines(value string) []string {
@@ -145,6 +157,16 @@ func LsRemoteEndpoint(ctx context.Context, dir, endpoint, ref string) (string, e
 		return "", nil
 	}
 	return fields[0], nil
+}
+
+// LsRemoteSymrefEndpoint reads symbolic-ref metadata from a previously
+// resolved endpoint without consulting a mutable repository remote.
+func LsRemoteSymrefEndpoint(ctx context.Context, dir, endpoint, ref string) (string, error) {
+	out, err := runRawWithEnv(ctx, dir, boundEndpointEnv(endpoint), "ls-remote", "--symref", boundEndpointRemote, ref)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // FetchEndpoint fetches exactly ref from a bound endpoint into FETCH_HEAD.

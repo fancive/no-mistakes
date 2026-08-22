@@ -198,6 +198,29 @@ func TestFanciveForkCheckoutUsesFeaturePushTarget(t *testing.T) {
 	}
 }
 
+func TestFanciveForkCheckoutUsesGitHubSSHOver443Endpoints(t *testing.T) {
+	const (
+		originURL        = "git@github.com:fancive/example.git"
+		upstreamURL      = "git@github.com:parent/example.git"
+		originEndpoint   = "ssh://git@ssh.github.com:443/fancive/example.git"
+		upstreamEndpoint = "ssh://git@ssh.github.com:443/parent/example.git"
+	)
+	root, remote := setupGuardRepo(t, originURL)
+	gitCmd(t, root, "config", "--unset-all", "url."+remote+".insteadOf")
+	gitCmd(t, root, "config", "--add", "url."+remote+".insteadOf", originEndpoint)
+	gitCmd(t, root, "config", "--add", "url."+remote+".insteadOf", upstreamEndpoint)
+	gitCmd(t, root, "remote", "add", "upstream", upstreamURL)
+	gitCmd(t, root, "checkout", "-b", "feature")
+
+	result, err := New(Options{Dir: root}).Check(context.Background(), types.CheckRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TargetRef != "refs/heads/feature" || result.Branch != "feature" {
+		t.Fatalf("fork checkout result = %+v", result)
+	}
+}
+
 func TestFanciveForkCheckoutBlocksMismatchedTrackingBranch(t *testing.T) {
 	root, remote := setupGuardRepo(t, "git@github.com:fancive/example.git")
 	const upstreamURL = "https://github.com/parent/example.git"

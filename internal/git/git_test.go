@@ -64,7 +64,8 @@ func TestResolveOriginEndpointBindsSinglePushURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if endpoint.FetchLiteral != "git@github.com:upstream/repo.git" || endpoint.PushLiteral != "git@github.com:fork/repo.git" || endpoint.PushEffective != endpoint.PushLiteral {
+	if endpoint.FetchLiteral != "git@github.com:upstream/repo.git" || endpoint.FetchEffective != endpoint.FetchLiteral ||
+		endpoint.PushLiteral != "git@github.com:fork/repo.git" || endpoint.PushEffective != endpoint.PushLiteral {
 		t.Fatalf("endpoint = %+v", endpoint)
 	}
 	if _, err := Run(ctx, root, "config", "--add", "remote.origin.pushurl", "git@github.com:other/repo.git"); err != nil {
@@ -81,6 +82,9 @@ func TestBoundEndpointPushAndRead(t *testing.T) {
 	if output, err := exec.Command("git", "init", "--bare", remote).CombinedOutput(); err != nil {
 		t.Fatalf("init bare: %v\n%s", err, output)
 	}
+	if output, err := exec.Command("git", "--git-dir="+remote, "symbolic-ref", "HEAD", "refs/heads/main").CombinedOutput(); err != nil {
+		t.Fatalf("set bare HEAD: %v\n%s", err, output)
+	}
 	ctx := context.Background()
 	sha, _ := HeadSHA(ctx, root)
 	if err := PushCommitEndpoint(ctx, root, remote, sha, "refs/heads/main"); err != nil {
@@ -89,5 +93,9 @@ func TestBoundEndpointPushAndRead(t *testing.T) {
 	got, err := LsRemoteEndpoint(ctx, root, remote, "refs/heads/main")
 	if err != nil || got != sha {
 		t.Fatalf("endpoint SHA = %q, want %q, err = %v", got, sha, err)
+	}
+	symref, err := LsRemoteSymrefEndpoint(ctx, root, remote, "HEAD")
+	if err != nil || !strings.Contains(symref, "ref: refs/heads/main\tHEAD") {
+		t.Fatalf("endpoint symref = %q, err = %v", symref, err)
 	}
 }
