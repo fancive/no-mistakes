@@ -1,207 +1,100 @@
 package main
 
 import (
-	"fmt"
-	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/kunchenguid/no-mistakes/internal/daemon"
 )
 
-func TestMain(m *testing.M) {
-	root, err := os.MkdirTemp("", "nm-main-test-")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "create test NM_HOME: %v\n", err)
-		os.Exit(1)
+func TestBinaryVersionAndRemovedDaemonCommand(t *testing.T) {
+	binary := buildTestBinary(t)
+	if out, err := exec.Command(binary, "--version").CombinedOutput(); err != nil || !strings.Contains(string(out), "no-mistakes version") {
+		t.Fatalf("--version: %v\n%s", err, out)
 	}
-	home, err := os.MkdirTemp("", "nm-main-home-")
-	if err != nil {
-		_ = os.RemoveAll(root)
-		fmt.Fprintf(os.Stderr, "create test HOME: %v\n", err)
-		os.Exit(1)
+	out, err := exec.Command(binary, "daemon").CombinedOutput()
+	if err == nil {
+		t.Fatalf("removed daemon command succeeded:\n%s", out)
 	}
-	_ = os.Setenv("NM_HOME", root)
-	_ = os.Setenv("HOME", home)
-	_ = os.Setenv("NO_MISTAKES_TELEMETRY", "off")
-	_ = os.Setenv("NO_MISTAKES_NO_UPDATE_CHECK", "1")
-
-	code := m.Run()
-
-	_ = os.RemoveAll(root)
-	_ = os.RemoveAll(home)
-	os.Exit(code)
-}
-
-func TestCLILogWriterReturnsDiscardWhenLogsDirMissing(t *testing.T) {
-	nmHome := t.TempDir()
-	t.Setenv("NM_HOME", nmHome)
-
-	w := cliLogWriter()
-	if _, err := w.Write([]byte("hello\n")); err != nil {
-		t.Fatalf("Write returned error: %v", err)
-	}
-
-	if _, err := os.Stat(filepath.Join(nmHome, "logs", "cli.log")); !os.IsNotExist(err) {
-		t.Fatalf("cli.log should not be created when logs dir is missing, stat err = %v", err)
-	}
-
-	if c, ok := w.(io.Closer); ok {
-		_ = c.Close()
-	}
-}
-
-func TestCLILogWriterAppendsToFileWhenLogsDirExists(t *testing.T) {
-	nmHome := t.TempDir()
-	t.Setenv("NM_HOME", nmHome)
-
-	logsDir := filepath.Join(nmHome, "logs")
-	if err := os.MkdirAll(logsDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-
-	w := cliLogWriter()
-	if _, err := w.Write([]byte("hello\n")); err != nil {
-		t.Fatalf("Write returned error: %v", err)
-	}
-	if c, ok := w.(io.Closer); ok {
-		if err := c.Close(); err != nil {
-			t.Fatalf("Close returned error: %v", err)
-		}
-	}
-
-	b, err := os.ReadFile(filepath.Join(logsDir, "cli.log"))
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	}
-	if string(b) != "hello\n" {
-		t.Fatalf("cli.log contents = %q, want %q", string(b), "hello\n")
-	}
-}
-
-func TestDaemonRunRootFromArgs(t *testing.T) {
-	t.Setenv("NM_DAEMON", "")
-
-	tests := []struct {
-		name     string
-		args     []string
-		wantRoot string
-		wantOK   bool
-		wantErr  string
-	}{
-		{name: "non-daemon command", args: []string{"daemon", "status"}},
-		{name: "daemon run no root", args: []string{"daemon", "run"}, wantOK: true},
-		{name: "daemon run root flag", args: []string{"daemon", "run", "--root", "/tmp/nm"}, wantRoot: "/tmp/nm", wantOK: true},
-		{name: "daemon run root equals", args: []string{"daemon", "run", "--root=/tmp/nm"}, wantRoot: "/tmp/nm", wantOK: true},
-		{name: "daemon run missing root value", args: []string{"daemon", "run", "--root"}, wantErr: "missing value for --root"},
-		{name: "daemon run help", args: []string{"daemon", "run", "--help"}},
-		{name: "daemon run short help", args: []string{"daemon", "run", "-h"}},
-		{name: "daemon run unknown flag", args: []string{"daemon", "run", "--bogus"}},
-		{name: "daemon run extra arg", args: []string{"daemon", "run", "extra"}},
-		{name: "daemon run root plus extra arg", args: []string{"daemon", "run", "--root", "/tmp/nm", "extra"}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			gotRoot, gotOK, err := daemonRunRootFromArgs(tt.args)
-			if tt.wantErr != "" {
-				if err == nil || err.Error() != tt.wantErr {
-					t.Fatalf("err = %v, want %q", err, tt.wantErr)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected err: %v", err)
-			}
-			if gotRoot != tt.wantRoot || gotOK != tt.wantOK {
-				t.Fatalf("got (%q, %v), want (%q, %v)", gotRoot, gotOK, tt.wantRoot, tt.wantOK)
-			}
-		})
-	}
-}
-
-func TestDaemonLogSinkRootFromArgs(t *testing.T) {
-	root, ok, err := daemonLogSinkRootFromArgs([]string{"daemon", "log-sink", "--root", "/tmp/nm"})
-	if err != nil || !ok || root != "/tmp/nm" {
-		t.Fatalf("got (%q, %v, %v)", root, ok, err)
-	}
-	for _, args := range [][]string{
-		{"daemon", "status"},
-		{"daemon", "log-sink"},
-		{"daemon", "log-sink", "--root=/tmp/nm"},
-	} {
-		if root, ok, err := daemonLogSinkRootFromArgs(args); err != nil || ok || root != "" {
-			t.Fatalf("%v got (%q, %v, %v)", args, root, ok, err)
+	for _, want := range []string{"schema_version: 1", "status: blocked", "stateless lean-guard migration"} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("daemon output missing %q:\n%s", want, out)
 		}
 	}
 }
 
-func TestWriteDaemonRunErrorPreservesBootstrapSinkOwnership(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("NM_HOME", root)
-	logDir := filepath.Join(root, "logs")
-	if err := os.MkdirAll(logDir, 0o755); err != nil {
+func TestBinaryCheckJourneyIsReadOnlyAndChinese(t *testing.T) {
+	binary := buildTestBinary(t)
+	root := filepath.Join(t.TempDir(), "repo")
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	bootstrapPath := filepath.Join(logDir, "daemon-bootstrap.log")
-	const existing = "active output\n"
-	if err := os.WriteFile(bootstrapPath, []byte(existing), 0o644); err != nil {
+	runGit := func(dir string, args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	runGit(root, "init", "-b", "main")
+	runGit(root, "config", "user.name", "Test")
+	runGit(root, "config", "user.email", "test@example.com")
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	bootstrap, err := os.OpenFile(bootstrapPath, os.O_WRONLY|os.O_APPEND, 0o644)
+	runGit(root, "add", "main.go")
+	runGit(root, "commit", "-m", "feat: initial")
+	runGit(filepath.Dir(remote), "init", "--bare", remote)
+	runGit(remote, "symbolic-ref", "HEAD", "refs/heads/main")
+	literalRemote := "git@github.com:fancive/lean-check-e2e.git"
+	runGit(root, "remote", "add", "origin", literalRemote)
+	runGit(root, "config", "url."+remote+".insteadOf", literalRemote)
+	runGit(root, "push", "-u", "origin", "main")
+	if err := os.WriteFile(filepath.Join(root, ".no-mistakes.yaml"), []byte("output_language: zh-CN\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n// change\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := runGit(root, "rev-parse", "HEAD")
+	cmd := exec.Command(binary, "check", "--file", "main.go", "--message", "feat(cli): 精简守卫")
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("check: %v\n%s", err, out)
 	}
-	writeDaemonRunError(bootstrap, fmt.Errorf("startup rejected: %w", daemon.ErrSingletonLockHeld))
-	if err := bootstrap.Close(); err != nil {
-		t.Fatal(err)
+	for _, want := range []string{"schema_version: 1", "status: passed", "output_language: zh-CN", "运行 no-mistakes commit"} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("check output missing %q:\n%s", want, out)
+		}
 	}
-	got, err := os.ReadFile(bootstrapPath)
-	if err != nil {
-		t.Fatal(err)
+	if after := runGit(root, "rev-parse", "HEAD"); after != before {
+		t.Fatalf("read-only check changed HEAD: %s -> %s", before, after)
 	}
-	if string(got) != existing {
-		t.Fatalf("bootstrap log = %q, want %q", got, existing)
+	bad := exec.Command(binary, "check", "--file", "main.go", "--message", "not conventional")
+	bad.Dir = root
+	badOutput, badErr := bad.CombinedOutput()
+	if badErr == nil {
+		t.Fatalf("invalid check succeeded:\n%s", badOutput)
 	}
-
-	terminalPath := filepath.Join(root, "terminal")
-	terminal, err := os.Create(terminalPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeDaemonRunError(terminal, fmt.Errorf("startup rejected: %w", daemon.ErrSingletonLockHeld))
-	if err := terminal.Close(); err != nil {
-		t.Fatal(err)
-	}
-	terminalOutput, err := os.ReadFile(terminalPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(terminalOutput), daemon.ErrSingletonLockHeld.Error()) {
-		t.Fatalf("terminal output = %q", terminalOutput)
+	for _, want := range []string{"output_language: zh-CN", "error_code: commit_policy", "提交范围或提交信息不符合规则"} {
+		if !strings.Contains(string(badOutput), want) {
+			t.Errorf("Chinese blocker missing %q:\n%s", want, badOutput)
+		}
 	}
 }
 
-func TestDaemonRunRootFromArgs_EnvDoesNotForceDaemonModeForProbes(t *testing.T) {
-	t.Setenv("NM_DAEMON", "1")
-
-	tests := [][]string{
-		{"--version"},
-		{"daemon", "status"},
-		{"status"},
+func buildTestBinary(t *testing.T) string {
+	t.Helper()
+	path := t.TempDir() + "/no-mistakes"
+	cmd := exec.Command("go", "build", "-buildvcs=false", "-o", path, ".")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build test binary: %v\n%s", err, out)
 	}
-
-	for _, args := range tests {
-		t.Run(strings.Join(args, " "), func(t *testing.T) {
-			gotRoot, gotOK, err := daemonRunRootFromArgs(args)
-			if err != nil {
-				t.Fatalf("unexpected err: %v", err)
-			}
-			if gotRoot != "" || gotOK {
-				t.Fatalf("got (%q, %v), want (%q, %v)", gotRoot, gotOK, "", false)
-			}
-		})
-	}
+	return path
 }

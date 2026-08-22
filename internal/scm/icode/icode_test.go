@@ -61,6 +61,30 @@ func TestFindPRMatchesCurrentRevision(t *testing.T) {
 	}
 }
 
+func TestFindReviewFallsBackToMergedProviderTruth(t *testing.T) {
+	t.Parallel()
+
+	host := New(testCmdFactory(map[string]testResponse{
+		"icode-cli api get_repo_reviews --repo baidu/inputmethod/v5api --status NEW -o json": {
+			stdout: `{"status":"OK","data":{"changes":[]}}`,
+		},
+		"icode-cli api get_repo_reviews --repo baidu/inputmethod/v5api --status SUBMITTED -o json": {
+			stdout: `{"status":"OK","data":{"changes":[]}}`,
+		},
+		"icode-cli api get_repo_reviews --repo baidu/inputmethod/v5api --status MERGED -o json": {
+			stdout: `{"status":"OK","data":{"changes":[{"_number":123,"branch":"release","current_revision":"abc123"}]}}`,
+		},
+	}), func() bool { return true }, "baidu/inputmethod/v5api", "abc123")
+
+	review, err := host.FindReview(context.Background(), "release")
+	if err != nil {
+		t.Fatalf("FindReview() error = %v", err)
+	}
+	if review == nil || review.Number != "123" {
+		t.Fatalf("FindReview() = %+v, want merged review 123", review)
+	}
+}
+
 func TestGetPRStateNormalizesICodeStatuses(t *testing.T) {
 	t.Parallel()
 
@@ -69,6 +93,7 @@ func TestGetPRStateNormalizesICodeStatuses(t *testing.T) {
 		want   scm.PRState
 	}{
 		{status: "NEW", want: scm.PRStateOpen},
+		{status: "SUBMITTED", want: scm.PRStateOpen},
 		{status: "MERGED", want: scm.PRStateMerged},
 		{status: "ABANDONED", want: scm.PRStateClosed},
 	}
@@ -90,6 +115,36 @@ func TestGetPRStateNormalizesICodeStatuses(t *testing.T) {
 				t.Fatalf("GetPRState() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestGetBoundPRStateRejectsAnotherPatchSet(t *testing.T) {
+	host := New(testCmdFactory(map[string]testResponse{
+		"icode-cli api get_review_info --change-number 123 -o json": {
+			stdout: `{"status":"OK","data":{"_number":123,"status":"MERGED","current_revision":"other"}}`,
+		},
+	}), func() bool { return true }, "baidu/inputmethod/v5api", "abc123")
+	if _, err := host.GetBoundPRState(context.Background(), &scm.PR{Number: "123"}, "abc123"); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("GetBoundPRState error = %v", err)
+	}
+}
+
+func TestCodeReviewVoteRangeIgnoresOtherLabels(t *testing.T) {
+	info := reviewInfo{Labels: map[string]struct {
+		All []struct {
+			Value any `json:"value"`
+		} `json:"all"`
+	}{
+		"Verified": {All: []struct {
+			Value any `json:"value"`
+		}{{Value: 2}}},
+		"Code-Review": {All: []struct {
+			Value any `json:"value"`
+		}{{Value: 0}}},
+	}}
+	maxVote, minVote := codeReviewVoteRange(info)
+	if maxVote != 0 || minVote != 0 {
+		t.Fatalf("Code-Review vote range = %d..%d", minVote, maxVote)
 	}
 }
 
@@ -173,7 +228,7 @@ func TestEnsureSubmittedSelfScoresAndSubmits(t *testing.T) {
 
 	host := New(testCmdFactory(map[string]testResponse{
 		"icode-cli api get_review_info --change-number 123 -o json": {
-			stdout: `{"status":"OK","data":{"_number":123,"status":"NEW","labels":{"Code-Review":{"all":[{"value":0}]}}}}`,
+			stdout: `{"status":"OK","data":{"_number":123,"status":"NEW","current_revision":"abc123","labels":{"Code-Review":{"all":[{"value":0}]}}}}`,
 		},
 		"icode-cli api set_review_score --repo baidu/inputmethod/v5api --change-number 123 --score 2 -o json": {
 			stdout: `{"status":"OK","data":{}}`,
@@ -183,7 +238,7 @@ func TestEnsureSubmittedSelfScoresAndSubmits(t *testing.T) {
 		},
 	}), func() bool { return true }, "baidu/inputmethod/v5api", "abc123", Options{Reviewers: "reviewer1,reviewer2", AutoSubmit: true})
 
-	result, err := host.EnsureSubmitted(context.Background(), &scm.PR{Number: "123"})
+	result, err := host.EnsureSubmitted(context.Background(), &scm.PR{Number: "123"}, "abc123")
 	if err != nil {
 		t.Fatalf("EnsureSubmitted() error = %v", err)
 	}
@@ -197,7 +252,7 @@ func TestEnsureSubmittedAddsReviewersAndWaitsForExternalPlus2(t *testing.T) {
 
 	host := New(testCmdFactory(map[string]testResponse{
 		"icode-cli api get_review_info --change-number 123 -o json": {
-			stdout: `{"status":"OK","data":{"_number":123,"status":"NEW","labels":{"Code-Review":{"all":[{"value":0}]}}}}`,
+			stdout: `{"status":"OK","data":{"_number":123,"status":"NEW","current_revision":"abc123","labels":{"Code-Review":{"all":[{"value":0}]}}}}`,
 		},
 		"icode-cli api set_review_score --repo baidu/inputmethod/v5api --change-number 123 --score 2 -o json": {
 			stdout: `{"status":"ERROR","message":"无合入权限"}`,
@@ -210,7 +265,7 @@ func TestEnsureSubmittedAddsReviewersAndWaitsForExternalPlus2(t *testing.T) {
 		},
 	}), func() bool { return true }, "baidu/inputmethod/v5api", "abc123", Options{Reviewers: "reviewer1,reviewer2", AutoSubmit: true})
 
-	result, err := host.EnsureSubmitted(context.Background(), &scm.PR{Number: "123"})
+	result, err := host.EnsureSubmitted(context.Background(), &scm.PR{Number: "123"}, "abc123")
 	if err != nil {
 		t.Fatalf("EnsureSubmitted() error = %v", err)
 	}
@@ -219,11 +274,32 @@ func TestEnsureSubmittedAddsReviewersAndWaitsForExternalPlus2(t *testing.T) {
 	}
 }
 
+func TestEnsureSubmittedTreatsDuplicateReviewerAsIdempotent(t *testing.T) {
+	host := New(testCmdFactory(map[string]testResponse{
+		"icode-cli api get_review_info --change-number 123 -o json": {
+			stdout: `{"status":"OK","data":{"_number":123,"status":"NEW","current_revision":"abc123","labels":{"Code-Review":{"all":[{"value":0}]}}}}`,
+		},
+		"icode-cli api set_review_score --repo baidu/inputmethod/v5api --change-number 123 --score 2 -o json": {
+			stdout: `{"status":"ERROR","message":"无合入权限"}`,
+		},
+		"icode-cli api add_reviewers --change-number 123 --reviewers reviewer1 -o json": {
+			stdout: `{"status":"ERROR","message":"reviewer already exists"}`,
+		},
+		"icode-cli api submit_review --repo baidu/inputmethod/v5api --change-number 123 -o json": {
+			stdout: `{"status":"ERROR","message":"未通过评审，需要 +2"}`,
+		},
+	}), func() bool { return true }, "baidu/inputmethod/v5api", "abc123", Options{Reviewers: "reviewer1", AutoSubmit: true})
+	result, err := host.EnsureSubmitted(context.Background(), &scm.PR{Number: "123"}, "abc123")
+	if err != nil || !result.Pending {
+		t.Fatalf("EnsureSubmitted = %+v, err = %v", result, err)
+	}
+}
+
 func TestEnsureSubmittedDoesNotWriteWithoutTrustedOptIn(t *testing.T) {
 	t.Parallel()
 
 	host := New(testCmdFactory(nil), func() bool { return true }, "baidu/inputmethod/v5api", "abc123")
-	result, err := host.EnsureSubmitted(context.Background(), &scm.PR{Number: "123"})
+	result, err := host.EnsureSubmitted(context.Background(), &scm.PR{Number: "123"}, "abc123")
 	if err != nil {
 		t.Fatalf("EnsureSubmitted() error = %v", err)
 	}

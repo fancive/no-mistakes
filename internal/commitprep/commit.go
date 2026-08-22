@@ -3,6 +3,7 @@
 package commitprep
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -31,6 +32,81 @@ type Result struct {
 	Provider scm.Provider
 	Files    []string
 	Amended  bool
+}
+
+// Validation is read-only evidence that the exact authored scope and message
+// satisfy provider policy at one observed repository state. Commit always
+// repeats this validation before mutation.
+type Validation struct {
+	Root     string
+	Branch   string
+	Provider scm.Provider
+	Files    []string
+	Message  string
+}
+
+// Validate performs the non-mutating half of Commit: repository/branch,
+// message, paths, Gerrit hook, and pre-existing index-scope checks.
+func Validate(ctx context.Context, opts Options) (Validation, error) {
+	dir := opts.Dir
+	if strings.TrimSpace(dir) == "" {
+		dir = "."
+	}
+	root, err := git.FindGitRoot(dir)
+	if err != nil {
+		return Validation{}, fmt.Errorf("find git root: %w", err)
+	}
+	branch, err := git.CurrentBranch(ctx, root)
+	if err != nil {
+		return Validation{}, fmt.Errorf("read current branch: %w", err)
+	}
+	if branch == "HEAD" {
+		return Validation{}, fmt.Errorf("detached HEAD: create or switch to a feature branch before committing")
+	}
+	provider := detectProvider(ctx, root)
+	message := strings.TrimSpace(opts.Message)
+	newMessage := message != ""
+	if opts.Amend {
+		currentMessage, err := git.Run(ctx, root, "show", "-s", "--format=%B", "HEAD")
+		if err != nil {
+			return Validation{}, fmt.Errorf("read HEAD commit message: %w", err)
+		}
+		if !newMessage {
+			message = currentMessage
+		}
+		if provider == scm.ProviderICode && newMessage {
+			currentChangeID := commitpolicy.ICodeChangeID(currentMessage)
+			if currentChangeID != "" {
+				if id := commitpolicy.ICodeChangeID(message); id != "" {
+					if id != currentChangeID {
+						return Validation{}, fmt.Errorf("amended iCode message changes the current Change-Id footer; keep %s to stay on the current CR", currentChangeID)
+					}
+				} else {
+					message += "\n\nChange-Id: " + currentChangeID
+				}
+			}
+		}
+	}
+	if err := commitpolicy.ValidateMessage(provider, message); err != nil {
+		return Validation{}, err
+	}
+	files, err := normalizeFiles(ctx, root, provider, opts.Files)
+	if err != nil {
+		return Validation{}, err
+	}
+	if provider == scm.ProviderICode {
+		if err := requireCommitMsgHook(ctx, root); err != nil {
+			return Validation{}, err
+		}
+	}
+	stagedBefore, err := stagedFiles(ctx, root)
+	if err != nil {
+		return Validation{}, fmt.Errorf("inspect staged files: %w", err)
+	}
+	if extras := difference(stagedBefore, files); len(extras) > 0 {
+		return Validation{}, fmt.Errorf("staged files outside the explicit --file list: %s", strings.Join(extras, ", "))
+	}
+	return Validation{Root: root, Branch: branch, Provider: provider, Files: files, Message: message}, nil
 }
 
 // Commit validates policy before mutating the index, stages only Files, checks
@@ -110,9 +186,33 @@ func Commit(ctx context.Context, opts Options) (Result, error) {
 		}
 	}()
 
-	addArgs := append([]string{"--literal-pathspecs", "add", "--"}, files...)
-	if _, err := git.Run(ctx, root, addArgs...); err != nil {
-		return Result{}, fmt.Errorf("stage explicit files: %w", err)
+	stagedDeletions, err := stagedDeletedFiles(ctx, root)
+	if err != nil {
+		return Result{}, fmt.Errorf("inspect staged deletions: %w", err)
+	}
+	deleted := make(map[string]struct{}, len(stagedDeletions))
+	for _, path := range stagedDeletions {
+		deleted[path] = struct{}{}
+	}
+	filesToStage := make([]string, 0, len(files))
+	for _, path := range files {
+		if _, alreadyDeleted := deleted[path]; alreadyDeleted {
+			if _, statErr := os.Lstat(filepath.Join(root, filepath.FromSlash(path))); os.IsNotExist(statErr) {
+				// The exact deletion is already represented in the index. Passing
+				// an absent path that is absent from the index back to git add makes
+				// Git reject the otherwise valid literal pathspec.
+				continue
+			}
+		}
+		filesToStage = append(filesToStage, path)
+	}
+	if len(filesToStage) > 0 {
+		// -A is scoped by the exact literal path list and captures selected
+		// deletions as well as additions and modifications.
+		addArgs := append([]string{"--literal-pathspecs", "add", "-A", "--"}, filesToStage...)
+		if _, err := git.Run(ctx, root, addArgs...); err != nil {
+			return Result{}, fmt.Errorf("stage explicit files: %w", err)
+		}
 	}
 	staged, err := stagedFiles(ctx, root)
 	if err != nil {
@@ -173,7 +273,10 @@ func Commit(ctx context.Context, opts Options) (Result, error) {
 }
 
 func detectProvider(ctx context.Context, root string) scm.Provider {
-	remote, err := git.GetRemoteURL(ctx, root, "origin")
+	remote, err := git.Run(ctx, root, "config", "--get", "remote.origin.url")
+	if err != nil || strings.TrimSpace(remote) == "" {
+		remote, err = git.GetRemoteURL(ctx, root, "origin")
+	}
 	if err != nil {
 		return scm.ProviderUnknown
 	}
@@ -213,7 +316,14 @@ func normalizeFiles(ctx context.Context, root string, provider scm.Provider, val
 			return nil, fmt.Errorf("inspect --file %q: %w", path, err)
 		case os.IsNotExist(err):
 			if _, trackedErr := git.Run(ctx, root, "--literal-pathspecs", "ls-files", "--error-unmatch", "--", path); trackedErr != nil {
-				return nil, fmt.Errorf("--file does not exist and is not a tracked deletion: %q", path)
+				// A deletion that is already staged is absent from the index, so
+				// ls-files cannot prove that it was tracked. Accept it only when
+				// the exact literal path exists in HEAD.
+				trackedAtHead, headErr := git.RunRaw(ctx, root, "--literal-pathspecs", "ls-tree", "--name-only", "-z", "HEAD", "--", path)
+				want := append([]byte(path), 0)
+				if headErr != nil || !bytes.Equal(trackedAtHead, want) {
+					return nil, fmt.Errorf("--file does not exist and is not a tracked deletion: %q", path)
+				}
 			}
 		}
 		seen[path] = struct{}{}
@@ -224,16 +334,32 @@ func normalizeFiles(ctx context.Context, root string, provider scm.Provider, val
 }
 
 func stagedFiles(ctx context.Context, root string) ([]string, error) {
-	out, err := git.Run(ctx, root, "diff", "--cached", "--name-only", "--no-renames", "-z")
+	out, err := git.RunRaw(ctx, root, "diff", "--cached", "--name-only", "--no-renames", "-z")
+	return parseNULPaths(out, err)
+}
+
+func stagedDeletedFiles(ctx context.Context, root string) ([]string, error) {
+	out, err := git.RunRaw(ctx, root, "diff", "--cached", "--name-only", "--no-renames", "--diff-filter=D", "-z")
+	return parseNULPaths(out, err)
+}
+
+func parseNULPaths(out []byte, err error) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	parts := strings.Split(strings.Trim(out, "\x00"), "\x00")
-	if len(parts) == 1 && parts[0] == "" {
+	if len(out) == 0 {
 		return nil, nil
 	}
-	for i := range parts {
-		parts[i] = filepath.ToSlash(parts[i])
+	if out[len(out)-1] != 0 {
+		return nil, fmt.Errorf("parse staged files: git returned a non-NUL-terminated path list")
+	}
+	rawParts := bytes.Split(out[:len(out)-1], []byte{0})
+	parts := make([]string, 0, len(rawParts))
+	for _, raw := range rawParts {
+		if len(raw) == 0 {
+			return nil, fmt.Errorf("parse staged files: git returned an empty path")
+		}
+		parts = append(parts, filepath.ToSlash(string(raw)))
 	}
 	sort.Strings(parts)
 	return parts, nil
@@ -305,6 +431,22 @@ type indexSnapshot struct {
 	mode   os.FileMode
 	exists bool
 }
+
+// IndexSnapshot is an opaque exact copy of the caller's Git index. It lets a
+// deterministic pre-commit linter run without retaining incidental staging.
+type IndexSnapshot struct{ snapshot indexSnapshot }
+
+// CaptureIndex snapshots the repository index for later exact restoration.
+func CaptureIndex(ctx context.Context, root string) (IndexSnapshot, error) {
+	snapshot, err := captureIndex(ctx, root)
+	if err != nil {
+		return IndexSnapshot{}, err
+	}
+	return IndexSnapshot{snapshot: snapshot}, nil
+}
+
+// Restore restores the exact index bytes and mode captured earlier.
+func (s IndexSnapshot) Restore() error { return s.snapshot.restore() }
 
 func captureIndex(ctx context.Context, root string) (indexSnapshot, error) {
 	path, err := git.Run(ctx, root, "rev-parse", "--git-path", "index")

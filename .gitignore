@@ -32,3 +32,5 @@ demo_raw.gif
 .env
 .env.local
 .no-mistakes/evidence/
+
+.e2e

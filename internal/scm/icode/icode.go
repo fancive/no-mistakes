@@ -1,4 +1,4 @@
-// Package icode implements scm.Host for Baidu iCode through icode-cli.
+// Package icode implements the synchronous Baidu iCode review transaction.
 package icode
 
 import (
@@ -16,7 +16,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/scm"
 )
 
-// CmdFactory builds a command in the pipeline worktree with its environment.
+// CmdFactory builds an icode-cli command in the caller's checkout.
 type CmdFactory func(ctx context.Context, name string, args ...string) *exec.Cmd
 
 // Host talks to Baidu iCode through icode-cli's JSON API.
@@ -37,8 +37,8 @@ type Options struct {
 	AutoSubmit bool
 }
 
-// New builds an iCode Host for repo. headSHA is the immutable revision the
-// pipeline pushed and is used to disambiguate reviews on the same target branch.
+// New builds an iCode Host for repo. headSHA is the immutable revision pushed
+// by lean delivery and disambiguates reviews on the same target branch.
 func New(cmd CmdFactory, cliAvailable func() bool, repo, headSHA string, options ...Options) *Host {
 	var opts Options
 	if len(options) > 0 {
@@ -73,10 +73,6 @@ func RepoPath(raw string) string {
 	return strings.TrimSuffix(repoPath, ".git")
 }
 
-func (h *Host) Provider() scm.Provider { return scm.ProviderICode }
-
-func (h *Host) Capabilities() scm.Capabilities { return scm.Capabilities{} }
-
 func (h *Host) Available(ctx context.Context) error {
 	if h.cliAvailable != nil && !h.cliAvailable() {
 		return errors.New("icode-cli is not installed")
@@ -105,8 +101,28 @@ type reviewListItem struct {
 }
 
 func (h *Host) FindPR(ctx context.Context, branch, _ string) (*scm.PR, error) {
+	return h.findReviewByStatus(ctx, branch, "NEW")
+}
+
+// FindReview resolves the current revision across open and merged reviews.
+// Lean delivery uses provider truth here to resume idempotently without a run
+// database and to avoid pushing another patch set after MERGED.
+func (h *Host) FindReview(ctx context.Context, branch string) (*scm.PR, error) {
+	for _, status := range []string{"NEW", "SUBMITTED", "MERGED"} {
+		review, err := h.findReviewByStatus(ctx, branch, status)
+		if err != nil {
+			return nil, err
+		}
+		if review != nil {
+			return review, nil
+		}
+	}
+	return nil, nil
+}
+
+func (h *Host) findReviewByStatus(ctx context.Context, branch, status string) (*scm.PR, error) {
 	var data reviewListEnvelope
-	if err := h.runAPI(ctx, &data, "get_repo_reviews", "--repo", h.repo, "--status", "NEW"); err != nil {
+	if err := h.runAPI(ctx, &data, "get_repo_reviews", "--repo", h.repo, "--status", status); err != nil {
 		return nil, err
 	}
 	branch = strings.TrimPrefix(strings.TrimSpace(branch), "refs/heads/")
@@ -126,29 +142,11 @@ func (h *Host) FindPR(ctx context.Context, branch, _ string) (*scm.PR, error) {
 	return nil, nil
 }
 
-// CreatePR does not create a second review: iCode creates the CR during the
-// preceding refs/for push. This method only resolves that newly-created CR.
-func (h *Host) CreatePR(ctx context.Context, branch, base string, _ scm.PRContent) (*scm.PR, error) {
-	pr, err := h.FindPR(ctx, branch, base)
-	if err != nil {
-		return nil, err
-	}
-	if pr == nil {
-		return nil, errors.New("iCode review was not visible after refs/for push")
-	}
-	return pr, nil
-}
-
-// UpdatePR is intentionally a no-op. iCode review metadata comes from the
-// pushed commit and iCafe-linked subject rather than a standalone PR body API.
-func (h *Host) UpdatePR(_ context.Context, pr *scm.PR, _ scm.PRContent) (*scm.PR, error) {
-	return pr, nil
-}
-
 type reviewInfo struct {
-	Number json.Number `json:"_number"`
-	Status string      `json:"status"`
-	Labels map[string]struct {
+	Number          json.Number `json:"_number"`
+	Status          string      `json:"status"`
+	CurrentRevision string      `json:"current_revision"`
+	Labels          map[string]struct {
 		All []struct {
 			Value any `json:"value"`
 		} `json:"all"`
@@ -160,15 +158,32 @@ func (h *Host) GetPRState(ctx context.Context, pr *scm.PR) (scm.PRState, error) 
 	if err := h.runAPI(ctx, &data, "get_review_info", "--change-number", pr.Number); err != nil {
 		return "", err
 	}
-	switch strings.ToUpper(strings.TrimSpace(data.Status)) {
-	case "NEW", "OPEN":
+	return normalizeReviewState(data.Status)
+}
+
+// GetBoundPRState reads revision and lifecycle from one provider response and
+// refuses to act on a concurrent patch set.
+func (h *Host) GetBoundPRState(ctx context.Context, pr *scm.PR, expectedRevision string) (scm.PRState, error) {
+	var data reviewInfo
+	if err := h.runAPI(ctx, &data, "get_review_info", "--change-number", pr.Number); err != nil {
+		return "", err
+	}
+	if !strings.EqualFold(strings.TrimSpace(data.CurrentRevision), strings.TrimSpace(expectedRevision)) {
+		return "", fmt.Errorf("iCode review current revision %q does not match exact HEAD %q", data.CurrentRevision, expectedRevision)
+	}
+	return normalizeReviewState(data.Status)
+}
+
+func normalizeReviewState(status string) (scm.PRState, error) {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "NEW", "OPEN", "SUBMITTED":
 		return scm.PRStateOpen, nil
-	case "MERGED", "SUBMITTED":
+	case "MERGED":
 		return scm.PRStateMerged, nil
 	case "ABANDONED", "CLOSED":
 		return scm.PRStateClosed, nil
 	default:
-		return "", fmt.Errorf("unrecognized iCode review status %q", data.Status)
+		return "", fmt.Errorf("unrecognized iCode review status %q", status)
 	}
 }
 
@@ -229,24 +244,17 @@ func (h *Host) GetChecks(ctx context.Context, pr *scm.PR) ([]scm.Check, error) {
 	return checks, nil
 }
 
-func (h *Host) GetMergeableState(context.Context, *scm.PR) (scm.MergeableState, error) {
-	return "", scm.ErrUnsupported
-}
-
-func (h *Host) FetchFailedCheckLogs(context.Context, *scm.PR, string, string, []string) (string, error) {
-	return "", scm.ErrUnsupported
-}
-
 var (
 	noScorePermissionPattern = regexp.MustCompile(`(?i)无合入权限|无权限|无法对自己|permission|forbidden|not allowed|denied`)
 	pendingSubmitPattern     = regexp.MustCompile(`(?i)not approved|not submittable|missing.*approval|need.*\+2|code-review|label|review-required|未.*\+2|没有.*\+2|评审.*不足|未通过.*评审|持续集成|pipeline|ci|流水线|检查.*失败|未执行|执行失败`)
+	duplicateReviewerPattern = regexp.MustCompile(`(?i)already|duplicate|exists|已存在|重复`)
 )
 
 // EnsureSubmitted applies the existing iCode delivery policy: try self +2,
 // fall back to configured reviewers when self-scoring is unavailable, and
 // submit once approvals and CI permit it. Repeated calls are idempotent for one
 // Host instance and GetPRState still confirms the terminal MERGED state.
-func (h *Host) EnsureSubmitted(ctx context.Context, pr *scm.PR) (scm.ReviewSubmission, error) {
+func (h *Host) EnsureSubmitted(ctx context.Context, pr *scm.PR, expectedRevision string) (scm.ReviewSubmission, error) {
 	if !h.autoSubmit {
 		return scm.ReviewSubmission{Pending: true, Message: "automatic iCode submit is disabled by trusted repository policy"}, nil
 	}
@@ -257,11 +265,14 @@ func (h *Host) EnsureSubmitted(ctx context.Context, pr *scm.PR) (scm.ReviewSubmi
 	if err := h.runAPI(ctx, &info, "get_review_info", "--change-number", pr.Number); err != nil {
 		return scm.ReviewSubmission{}, err
 	}
+	if err := requireExpectedRevision(info, expectedRevision); err != nil {
+		return scm.ReviewSubmission{}, err
+	}
 	if strings.EqualFold(strings.TrimSpace(info.Status), "MERGED") {
 		h.submitted = true
 		return scm.ReviewSubmission{Submitted: true, Message: "review already merged"}, nil
 	}
-	maxVote, minVote := reviewVoteRange(info)
+	maxVote, minVote := codeReviewVoteRange(info)
 	if minVote <= -2 {
 		return scm.ReviewSubmission{}, errors.New("iCode review has a -2 vote and cannot be submitted")
 	}
@@ -272,7 +283,10 @@ func (h *Host) EnsureSubmitted(ctx context.Context, pr *scm.PR) (scm.ReviewSubmi
 				return scm.ReviewSubmission{}, fmt.Errorf("set iCode +2: %w", err)
 			}
 			if h.reviewers != "" && !h.reviewersSet {
-				if addErr := h.runAPI(ctx, nil, "add_reviewers", "--change-number", pr.Number, "--reviewers", h.reviewers); addErr != nil {
+				if err := h.recheckRevision(ctx, pr, expectedRevision); err != nil {
+					return scm.ReviewSubmission{}, err
+				}
+				if addErr := h.runAPI(ctx, nil, "add_reviewers", "--change-number", pr.Number, "--reviewers", h.reviewers); addErr != nil && !duplicateReviewerPattern.MatchString(addErr.Error()) {
 					return scm.ReviewSubmission{}, fmt.Errorf("add iCode reviewers: %w", addErr)
 				}
 				h.reviewersSet = true
@@ -280,6 +294,9 @@ func (h *Host) EnsureSubmitted(ctx context.Context, pr *scm.PR) (scm.ReviewSubmi
 		}
 	}
 
+	if err := h.recheckRevision(ctx, pr, expectedRevision); err != nil {
+		return scm.ReviewSubmission{}, err
+	}
 	if err := h.runAPI(ctx, nil, "submit_review", "--repo", h.repo, "--change-number", pr.Number); err != nil {
 		if pendingSubmitPattern.MatchString(err.Error()) {
 			return scm.ReviewSubmission{Pending: true, Message: err.Error()}, nil
@@ -290,9 +307,28 @@ func (h *Host) EnsureSubmitted(ctx context.Context, pr *scm.PR) (scm.ReviewSubmi
 	return scm.ReviewSubmission{Submitted: true, Message: "iCode accepted submit"}, nil
 }
 
-func reviewVoteRange(info reviewInfo) (maxVote, minVote int) {
+func requireExpectedRevision(info reviewInfo, expected string) error {
+	if !strings.EqualFold(strings.TrimSpace(info.CurrentRevision), strings.TrimSpace(expected)) {
+		return fmt.Errorf("iCode review current revision %q does not match exact HEAD %q", info.CurrentRevision, expected)
+	}
+	return nil
+}
+
+func (h *Host) recheckRevision(ctx context.Context, pr *scm.PR, expected string) error {
+	var info reviewInfo
+	if err := h.runAPI(ctx, &info, "get_review_info", "--change-number", pr.Number); err != nil {
+		return err
+	}
+	return requireExpectedRevision(info, expected)
+}
+
+func codeReviewVoteRange(info reviewInfo) (maxVote, minVote int) {
 	first := true
-	for _, label := range info.Labels {
+	for name, label := range info.Labels {
+		normalized := strings.ToLower(strings.NewReplacer("-", "", "_", "", " ", "").Replace(name))
+		if normalized != "codereview" {
+			continue
+		}
 		for _, vote := range label.All {
 			value := intValue(vote.Value)
 			if first || value > maxVote {

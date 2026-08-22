@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -58,6 +59,23 @@ func installChangeIDHook(t *testing.T, dir string) {
 	}
 }
 
+func TestStagedFilesPreservesWhitespaceInNULNames(t *testing.T) {
+	dir := initRepo(t, "git@github.com:fancive/example.git")
+	want := []string{" leading.txt", "plain.txt", "trailing.txt "}
+	for _, path := range want {
+		write(t, dir, path, path+"\n")
+	}
+	gitCmd(t, dir, "--literal-pathspecs", "add", "--", want[0], want[1], want[2])
+
+	got, err := stagedFiles(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("staged files = %#v, want %#v", got, want)
+	}
+}
+
 func TestCommitGitHubStagesOnlyExplicitFilesAndSetsAuthor(t *testing.T) {
 	dir := initRepo(t, "git@github.com:fancive/example.git")
 	write(t, dir, "selected.txt", "selected\n")
@@ -105,6 +123,32 @@ func TestCommitRefusesPreStagedFileOutsideExplicitListWithoutMutatingIndex(t *te
 	}
 	if got := gitCmd(t, dir, "diff", "--cached", "--name-only"); got != "already-staged.txt" {
 		t.Fatalf("index changed: %q", got)
+	}
+}
+
+func TestCommitAllowsExplicitPreStagedDeletion(t *testing.T) {
+	dir := initRepo(t, "git@github.com:fancive/example.git")
+	write(t, dir, "obsolete.txt", "remove me\n")
+	gitCmd(t, dir, "add", "obsolete.txt")
+	gitCmd(t, dir, "commit", "-m", "test: add obsolete fixture")
+	gitCmd(t, dir, "rm", "obsolete.txt")
+
+	result, err := Commit(context.Background(), Options{
+		Dir:     dir,
+		Files:   []string{"obsolete.txt"},
+		Message: "refactor(commit): remove obsolete file",
+	})
+	if err != nil {
+		t.Fatalf("Commit failed for explicit pre-staged deletion: %v", err)
+	}
+	if got, want := strings.Join(result.Files, ","), "obsolete.txt"; got != want {
+		t.Fatalf("committed files = %q, want %q", got, want)
+	}
+	if got := gitCmd(t, dir, "show", "--format=", "--name-status", "HEAD"); got != "D\tobsolete.txt" {
+		t.Fatalf("committed change = %q", got)
+	}
+	if got := gitCmd(t, dir, "status", "--short"); got != "" {
+		t.Fatalf("worktree not clean after deletion commit: %q", got)
 	}
 }
 

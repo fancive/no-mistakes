@@ -1,147 +1,71 @@
-<h1 align="center"><code>git push no-mistakes</code></h1>
-<p align="center">
-  <a href="https://github.com/kunchenguid/no-mistakes/actions/workflows/release.yml"
-    ><img
-      alt="Release"
-      src="https://img.shields.io/github/actions/workflow/status/kunchenguid/no-mistakes/release.yml?style=flat-square&label=release"
-  /></a>
-  <a href="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-blue?style=flat-square"
-    ><img
-      alt="Platform"
-      src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-blue?style=flat-square"
-  /></a>
-  <a href="https://x.com/kunchenguid"
-    ><img
-      alt="X"
-      src="https://img.shields.io/badge/X-@kunchenguid-black?style=flat-square"
-  /></a>
-  <a href="https://discord.gg/Wsy2NpnZDu"
-    ><img
-      alt="Discord"
-      src="https://img.shields.io/discord/1439901831038763092?style=flat-square&label=discord"
-  /></a>
-</p>
+# no-mistakes
 
-<p align="center">
-  <a href="https://trendshift.io/repositories/27829?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-27829" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/27829" alt="kunchenguid%2Fno-mistakes | Trendshift" width="250" height="55"/></a>
-</p>
+`no-mistakes` 是一个同步、无状态的交付守卫，只保留适合确定性执行的部分：
 
-<h3 align="center">干掉所有 slop，开出干净的 PR。</h3>
+- 精确校验本次修改文件范围和敏感路径；
+- 校验 GitHub / iCode 的提交信息、作者和 Gerrit `Change-Id`；
+- 运行仓库显式配置的 changed-file lint；
+- 校验当前分支和远端目标；
+- 用普通、非 force 的方式推送精确 HEAD。
 
-<p align="center"><a href="README.md">English</a> · <strong>简体中文</strong></p>
+它不是 AI reviewer，也不是自动修复循环。它没有 daemon、隐藏 worktree、运行数据库、
+rebase/sync 引擎、TUI、GitHub PR 创建和 CI 监控。`$ship` 等外层流程负责意图、授权、
+review、测试、CI、合入和部署。
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/demo.gif" alt="no-mistakes demo" width="800" />
-</p>
-
-`no-mistakes` 在你真实的远端前面放了一个本地 git 代理。
-把分支推给 `no-mistakes` 而不是 `origin`，它会拉起一个用完即弃的 worktree，跑一条 AI 驱动的校验流水线，**只有每一项检查都通过后**才把分支转发到配置的推送目标，并自动开出一个干净的 PR。
-
-- **不阻塞** —— 流水线在隔离的 worktree 里跑，不打断你手头的工作。
-- **不挑 agent** —— 支持 `claude`、`codex`、`rovodev`、`opencode`、`pi`、`copilot`，也可通过 `acpx` 使用 `cursor` / `acp:<target>`，并支持有序 fallback。
-- **agent 原生** —— `/no-mistakes` 既能让编码 agent 完成一个任务再过网关，也能直接为已提交的工作过网关：它跑完流水线、让流水线应用安全的修复，剩下的升级给你。
-- **人始终说了算** —— 自动修复，还是逐条审查 findings，你决定。
-- **默认就是干净 PR** —— 推送、开 PR、盯 CI、自动修复失败，一气呵成。
-
-完整文档：<https://kunchenguid.github.io/no-mistakes/>
-
-## 工作原理
-
-```
-        你的分支
-            │  git push no-mistakes
-            ▼
-   ┌───────────────────────────────────────────────┐
-   │  用完即弃的 worktree —— 你的工作原地不动          │
-   │  review → test → docs → lint → push → PR → CI │
-   └───────────────────────────────────────────────┘
-            │  每项检查变绿
-            ▼
-        干净的 PR，已替你开好
-```
-
-每一步要么自己通过，要么停下来给你一条 **finding** 让你处理。
-安全、机械性的修复会自动应用；任何牵涉到你**意图**的，都会升级给你来 **approve（批准）**、**fix（修复）** 或 **skip（跳过）**。
-在每项检查都变绿之前，没有任何东西会到达配置的推送目标。
-
-## 安装
+## 命令
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh
+no-mistakes check --file internal/example.go --message "feat(core): add guard"
+no-mistakes commit --file internal/example.go --message "feat(core): add guard" --allow-repo-lint
+no-mistakes push --expected-head <commit-sha>
 ```
 
-Windows、Go install 以及从源码构建的说明，见[安装指南](https://kunchenguid.github.io/no-mistakes/start-here/installation/)。
+所有命令都输出带 `schema_version: 1` 的 TOON。`check` 只读；`commit` 只暂存重复传入的
+`--file`，失败时恢复 index/HEAD；`push` 在写入前重新读取当前分支、精确 HEAD 和远端状态。
 
-## 快速上手
+iCode 的 SCM_FLOW 目标分支必须预先存在。缺失时会阻塞并提示显式运行
+`$ipipe-pull-branch`，no-mistakes 自己不会建分支。iCode 仍保留检查、自助 `+2`、
+reviewer fallback、submit、`MERGED` 证明，以及可选的 `opera-deploy` / `imeShahe` 交接信息。
+但仓库配置本身不能授权 reviewer、`+2` 或 submit 写操作。
+
+## 配置
+
+```yaml
+output_language: zh-CN
+commands:
+  lint: bash scripts/lint-changed.sh
+icode:
+  auto_submit: true
+  reviewers: [alice, bob]
+```
+
+`check` 只展示 lint 命令；`commit` 只有在显式传入 `--allow-repo-lint` 后才运行它，并提供
+NUL 分隔的 changed-file manifest。`output_language: zh-CN` 会让结构化的用户提示使用中文。
+
+`icode.auto_submit` 默认是 `false`。设为 `true` 只表示该策略允许被调用方显式授权。
+`check` 会输出 `icode_policy_hash`；调用方还必须同时绑定提交 SHA 和当前策略：
 
 ```sh
-$ no-mistakes init
-  ✓ Gate initialized
-
-    repo  /Users/you/src/my-repo
-    gate  no-mistakes → /Users/you/.no-mistakes/repos/abc123def456.git
-  remote  git@github.com:you/my-repo.git
-   skill  /no-mistakes installed for agents at user level
-
-  Push through the gate with:
-  git push no-mistakes <branch>
-
-$ git checkout my-branch
-
-# 在分支里干点活……
-
-$ git push no-mistakes
-  * Pipeline started
-
-  Run no-mistakes to review.
-
-$ no-mistakes
-# 打开当前运行的 TUI
+no-mistakes push --expected-head <commit-sha> \
+  --allow-icode-submit --icode-policy-hash <check-输出的哈希>
 ```
 
-如果是 GitHub fork 贡献，让 `origin` 指向父仓库，并用 `no-mistakes init --fork-url <your-fork-url>` 初始化。
+不传这组授权时，iCode 仍可推送 CR 并查看检查，但会在 reviewer、`+2`、submit 前返回
+pending。`icode-cli` 没有 revision-CAS 写参数，因此显式授权后的写操作仍会立即复核 revision，
+且只有平台返回 `MERGED` 才算交付成功。
 
-在 TUI 里你逐条处理 **finding**：**auto-fix** 类自动替你应用（或由你 approve 放行），**ask-user** 类需要你判断，由你 approve、fix 或 skip。
-每项检查变绿后，网关会把你的分支转发到配置的推送目标并替你开好 PR，不用手动 `git push origin`，也不用手写 PR 正文。
-想让编码 agent 无人值守地走完同一套流程？
-用 `/no-mistakes`（见下文）。
+## 旧状态清理
 
-## 触发网关的三种方式
-
-每一处改动都走同一条流水线。改动就绪时，挑一个最贴合你当下工作方式的入口：
-
-- **`git push no-mistakes`** —— 显式的 Git 路径。把已提交的分支推给网关 remote，而不是 `origin`。
-- **`no-mistakes`** —— TUI。改完之后运行它（无需先提交），向导会带你建分支、提交、推过网关，然后挂到这次运行上。`no-mistakes -y` 会把这一切自动做完。
-- **`/no-mistakes`** —— agent skill。用 `/no-mistakes <task>` 让编码 agent 完成一个任务再过网关，或用裸 `/no-mistakes` 为已提交的工作过网关。它跑完流水线、让流水线应用安全的修复，并在任何需要人来拍板的地方停下来问你。
-
-`no-mistakes init` 会为 Claude Code 及其他 agent 安装 `/no-mistakes` skill。底层上这个 skill 驱动的是 `no-mistakes axi` —— 同一套审批流程的非交互式 TOON 接口。
-
-完整的首次运行走查见[快速上手](https://kunchenguid.github.io/no-mistakes/start-here/quick-start/)。
-
-## 开发
+旧版本可能在 `~/.no-mistakes` 留下 daemon、数据库、gate 或托管 worktree：
 
 ```sh
-make build   # 构建 bin/no-mistakes（带版本信息）
-make test    # 运行 go test -race ./...（不含 e2e 套件）
-make e2e     # 运行打了标签的端到端 agent 旅程套件
-make e2e-record # agent 线格式变化时，重新录制 e2e fixtures
-make lint    # 检查生成的 skill 是否漂移，并跑 go vet ./...
-make skill   # 重新生成已提交的 no-mistakes skill 文件
-make fmt     # 运行 gofmt -w .
-make demo    # 重新生成 demo.gif 和 demo.mp4（需要 vhs 和 ffmpeg）
-make docs    # 在 docs/dist 构建 Astro 文档站
+no-mistakes legacy-cleanup --plan
+no-mistakes legacy-cleanup --confirm <plan-hash>
 ```
 
-完整 target 列表见 `Makefile`。
+确认时会重新扫描并核对 hash；活动中或无法证明归属的状态会阻塞。无关文件、hook、
+remote、配置和用户 worktree 都会保留。
 
-`make e2e-record` 会用真实的 `claude`、`codex`、`opencode` CLI 覆盖 `internal/e2e/fixtures/`，会消耗真实 API 额度，提交前应当审查。
+升级前请先用旧版二进制运行 `no-mistakes daemon stop`；精简版清理器不会仅凭推断去杀进程。
 
-## Star 历史
-
-<a href="https://www.star-history.com/?repos=kunchenguid%2Fno-mistakes&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=kunchenguid/no-mistakes&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=kunchenguid/no-mistakes&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=kunchenguid/no-mistakes&type=date&legend=top-left" />
- </picture>
-</a>
+开发验证命令：`make build`、`make lint`、`make test`、`make e2e`。

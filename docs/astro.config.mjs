@@ -1,14 +1,12 @@
 import { defineConfig } from "astro/config";
-import mermaid from "astro-mermaid";
 import starlight from "@astrojs/starlight";
 
 export default defineConfig({
   site: "https://kunchenguid.github.io",
   base: "/no-mistakes",
   integrations: [
-    mermaid({ enableLog: false }),
     starlight({
-      title: "git push no-mistakes",
+      title: "no-mistakes lean guard",
       customCss: ["./src/styles/custom.css"],
       social: {
         github: "https://github.com/kunchenguid/no-mistakes",
@@ -25,22 +23,11 @@ export default defineConfig({
           ],
         },
         {
-          label: "Concepts",
-          items: [
-            { label: "The Gate Model", slug: "concepts/gate-model" },
-            { label: "Pipeline", slug: "concepts/pipeline" },
-            { label: "Auto-Fix Loop", slug: "concepts/auto-fix" },
-            { label: "Daemon & Worktrees", slug: "concepts/daemon" },
-          ],
-        },
-        {
           label: "Guides",
           items: [
             { label: "Configuration", slug: "guides/configuration" },
-            { label: "Choosing an Agent", slug: "guides/agents" },
             { label: "Provider Integration", slug: "guides/provider-integration" },
-            { label: "Setup Wizard", slug: "guides/setup-wizard" },
-            { label: "Using the TUI", slug: "guides/tui" },
+            { label: "Legacy Cleanup", slug: "guides/legacy-cleanup" },
             { label: "Troubleshooting", slug: "guides/troubleshooting" },
           ],
         },
@@ -48,9 +35,6 @@ export default defineConfig({
           label: "Reference",
           items: [
             { label: "CLI Commands", slug: "reference/cli" },
-            { label: "Evaluation toolkit", slug: "reference/eval" },
-            { label: "Pipeline Steps", slug: "reference/pipeline-steps" },
-            { label: "Global Config", slug: "reference/global-config" },
             { label: "Repo Config", slug: "reference/repo-config" },
             { label: "Environment Variables", slug: "reference/environment" },
           ],

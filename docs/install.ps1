@@ -32,12 +32,4 @@ if ($userPath -notlike "*$installDir*") {
     Write-Host "Added $installDir to user PATH. Restart your terminal."
 }
 
-$restart = Start-Process -FilePath "$installDir\no-mistakes.exe" -ArgumentList @(
-    "daemon",
-    "restart"
-) -Wait -PassThru -NoNewWindow
-if ($restart.ExitCode -ne 0) {
-    throw "Failed to restart daemon (exit code $($restart.ExitCode))"
-}
-
 Write-Host "no-mistakes $version installed to $installDir\no-mistakes.exe"

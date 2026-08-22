@@ -1,7 +1,6 @@
 // Command genskill renders the canonical no-mistakes SKILL.md from the
-// internal/skill package into skills/no-mistakes/SKILL.md. The same rendering
-// is what `no-mistakes init` installs into the user-level agent skill
-// directories, so the committed file and the installed copies never drift.
+// internal/skill package into skills/no-mistakes/SKILL.md. The committed file
+// is the discoverable distribution copy.
 //
 // Usage:
 //
